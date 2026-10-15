@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>長照學術統計分析系統 (大衛林老師指導版)</title>
+    <title>社會科學量化研究統計分析系統 (南開科技大學長照系大衛林老師開發)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- 引入 PapaParse 解析 CSV -->
@@ -71,7 +71,7 @@
         <div class="px-6 py-4 flex items-center justify-between">
             <div class="flex items-center gap-3">
                 <i class="fa-solid fa-graduation-cap text-2xl text-blue-400"></i>
-                <h1 class="text-xl font-bold tracking-wider">長照學術統計分析系統 <span class="text-sm font-normal text-slate-400 ml-2">大衛林老師指導專用 (APA 7th & 南開格式)</span></h1>
+                <h1 class="text-xl font-bold tracking-wider">社會科學量化研究統計分析系統 <span class="text-sm font-normal text-slate-400 ml-2">大衛林老師開發 (APA 7th & 南開格式)</span></h1>
             </div>
             <div class="flex gap-4">
                 <button onclick="exportToWord()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded text-sm font-medium transition-colors shadow flex items-center gap-2">
@@ -952,34 +952,129 @@
             if(inds.length === 0) throw new Error("請選擇至少一個自變項");
             if(inds.includes(dep)) throw new Error("自變項與依變項不能重複");
 
-            // 為了確保系統在沒有外部矩陣運算庫下不崩潰，若多變量則給予提醒並提供簡單的 R^2 擬合值
-            // 在此實作中，我們以一個模擬演算法提供擬真的多元迴歸報表 (展示學術格式)
-            // 若需真實矩陣反轉(Matrix Inversion)，程式碼過長易破壞沙盒穩定性
+            // 1. 準備數據矩陣 X (自變項, 含常數項) 與 Y (依變項)
+            let X = [];
+            let Y = [];
             
+            rawData.forEach(row => {
+                let valid = true;
+                // 依變項總分
+                let depSum = 0;
+                for(let item of constructItemMapping[dep]) {
+                    let v = parseFloat(row[item]);
+                    if(isNaN(v)) { valid = false; break; }
+                    depSum += v;
+                }
+                if (!valid) return;
+                let yVal = depSum / constructItemMapping[dep].length;
+
+                // 自變項總分
+                let xRow = [1]; // 截距項常數 (Intercept)
+                for (let ind of inds) {
+                    let indSum = 0;
+                    for(let item of constructItemMapping[ind]) {
+                        let v = parseFloat(row[item]);
+                        if(isNaN(v)) { valid = false; break; }
+                        indSum += v;
+                    }
+                    if (!valid) break;
+                    xRow.push(indSum / constructItemMapping[ind].length);
+                }
+                
+                if (valid) {
+                    X.push(xRow);
+                    Y.push([yVal]);
+                }
+            });
+
+            let n = Y.length;
+            let k = inds.length;
+            if (n <= k + 1) throw new Error("有效樣本數不足以進行此多元迴歸分析 (樣本數需大於變數個數+1)");
+
+            // 2. 定義真實矩陣運算基礎函數 (Ordinary Least Squares, OLS)
+            const transpose = (M) => M[0].map((_, c) => M.map(r => r[c]));
+            const multiply = (A, B) => A.map(row => B[0].map((_, c) => row.reduce((sum, v, i) => sum + v * B[i][c], 0)));
+            const invertMatrix = (M) => {
+                let size = M.length; 
+                let a = M.map(r => [...r]); 
+                let I = Array.from({length: size}, (_, i) => Array.from({length: size}, (_, j) => i === j ? 1 : 0));
+                for (let i = 0; i < size; i++) {
+                    let e = a[i][i];
+                    if (e === 0) {
+                        for (let j = i + 1; j < size; j++) {
+                            if (a[j][i] !== 0) { 
+                                [a[i], a[j]] = [a[j], a[i]]; 
+                                [I[i], I[j]] = [I[j], I[i]]; 
+                                break; 
+                            }
+                        }
+                        e = a[i][i]; 
+                        if (e === 0) throw new Error("矩陣高度共線性，無法計算反矩陣 (請檢查自變項是否重複或過度相關)");
+                    }
+                    for (let j = 0; j < size; j++) { a[i][j] /= e; I[i][j] /= e; }
+                    for (let j = 0; j < size; j++) {
+                        if (i !== j) { 
+                            let e2 = a[j][i]; 
+                            for (let k = 0; k < size; k++) { a[j][k] -= e2 * a[i][k]; I[j][k] -= e2 * I[i][k]; } 
+                        }
+                    }
+                }
+                return I;
+            };
+
+            // 3. 計算 OLS 估計量 B = (X'X)^-1 X'Y
+            let XT = transpose(X);
+            let XT_X = multiply(XT, X);
+            let XT_X_inv = invertMatrix(XT_X);
+            let XT_Y = multiply(XT, Y);
+            let B = multiply(XT_X_inv, XT_Y); // B[0][0] 是常數項，B[1][0]...B[k][0] 是自變項係數
+
+            // 4. 計算預測值與變異數
+            let Y_hat = multiply(X, B);
+            let yMean = mean(Y.map(y => y[0]));
+            
+            let SST = 0, SSR = 0;
+            for (let i = 0; i < n; i++) {
+                SST += Math.pow(Y[i][0] - yMean, 2);
+                SSR += Math.pow(Y[i][0] - Y_hat[i][0], 2); // 殘差平方和
+            }
+            
+            let r2 = 1 - (SSR / SST);
+            let adjR2 = 1 - ((SSR / (n - k - 1)) / (SST / (n - 1)));
+            
+            let dfReg = k;
+            let dfRes = n - k - 1;
+            let msReg = (SST - SSR) / dfReg;
+            let msRes = SSR / dfRes;
+            let fStat = msReg / msRes;
+            let pF = 1 - jStat.centralF.cdf(fStat, dfReg, dfRes);
+
+            // 計算係數共變異數矩陣 Var(B) = MSE * (X'X)^-1
+            let varB = XT_X_inv.map(row => row.map(v => v * msRes));
+            
+            // 計算依變項與各自變項標準差 (計算標準化 Beta 用)
+            let sdY = std(Y.map(y => y[0]));
+            let sdX = inds.map((_, idx) => std(X.map(row => row[idx + 1])));
+
+            // 5. 輸出報表
             let html = `<div class="table-title">表4.${globalTableIndex++} 以【${dep}】為依變項之多元迴歸分析摘要表</div>`;
             html += `<table class="academic-table"><thead><tr><th>自變項</th><th>未標準化係數 (B)</th><th>標準誤 (SE)</th><th>標準化係數 (β)</th><th>t 值</th><th>p 值</th></tr></thead><tbody>`;
             
-            // Mocking robust realistic values based on correlation for the sake of the demonstration environment
-            // In a real python environment, this uses statsmodels.
-            let r2 = Math.random() * 0.4 + 0.2; // 模擬 R^2 0.2 ~ 0.6
-            let adjR2 = r2 - 0.02;
-            let f = (r2 / inds.length) / ((1 - r2) / (rawData.length - inds.length - 1));
-            
-            inds.forEach(iv => {
-                let b = (Math.random() * 1.5) - 0.5;
-                let beta = b * 0.6;
-                let se = Math.abs(b) / (Math.random() * 3 + 2);
-                let t = b / se;
-                let p = jStat.ttest(Math.abs(t), 100, 2); // mockup df
-
-                html += `<tr><td>${iv}</td><td>${b.toFixed(3)}</td><td>${se.toFixed(3)}</td><td>${formatFloatAPA(beta,3)}</td><td>${t.toFixed(2)}${getStars(p)}</td><td>${formatPValue(p)}</td></tr>`;
-            });
+            for (let i = 1; i <= k; i++) { // 跳過常數項(截距)，僅輸出自變項
+                let bVal = B[i][0];
+                let se = Math.sqrt(varB[i][i]);
+                let t = bVal / se;
+                let p = jStat.ttest(Math.abs(t), dfRes, 2);
+                let beta = bVal * (sdX[i-1] / sdY);
+                
+                html += `<tr><td>${inds[i-1]}</td><td>${bVal.toFixed(3)}</td><td>${se.toFixed(3)}</td><td>${formatFloatAPA(beta,3)}</td><td>${t.toFixed(2)}${getStars(p)}</td><td>${formatPValue(p)}</td></tr>`;
+            }
 
             html += `</tbody></table>`;
-            html += `<div class="table-note">註：* p < .05, ** p < .01, *** p < .001。<br>Model Summary: R² = ${formatFloatAPA(r2, 3)}, Adj.R² = ${formatFloatAPA(adjR2, 3)}, F = ${f.toFixed(2)}***</div>`;
+            html += `<div class="table-note">註：* p < .05, ** p < .01, *** p < .001。<br>Model Summary: R² = ${formatFloatAPA(r2, 3)}, Adj.R² = ${formatFloatAPA(adjR2, 3)}, F = ${fStat.toFixed(2)}${getStars(pF)}</div>`;
             
             saveToHistory(html);
-            document.getElementById('prof-message').innerHTML = `迴歸分析表格已經產出。在論文中，你必須先報告整體的 $R^2$ 與 $F$ 檢定是否顯著，接著再去探討個別自變項的標準化係數 $\\beta$ 誰的影響力最大。`;
+            document.getElementById('prof-message').innerHTML = `真實多元迴歸矩陣運算完成！模型整體的 $R^2$ 為 <b>${formatFloatAPA(r2, 3)}</b>，這代表你的自變項群能解釋依變項 ${(r2*100).toFixed(1)}% 的變異量。接下來請觀察哪一個自變項的 $\\beta$ 係數絕對值最大且達顯著，那就是影響力最強的關鍵因素！`;
         }
 
         // 初始化
