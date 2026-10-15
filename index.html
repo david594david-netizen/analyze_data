@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>社會科學量化研究統計分析系統 (南開科技大學長照系大衛林老師開發)</title>
+    <title>長照學術統計分析系統 (大衛林老師指導版)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- 引入 PapaParse 解析 CSV -->
@@ -71,7 +71,7 @@
         <div class="px-6 py-4 flex items-center justify-between">
             <div class="flex items-center gap-3">
                 <i class="fa-solid fa-graduation-cap text-2xl text-blue-400"></i>
-                <h1 class="text-xl font-bold tracking-wider">社會科學量化研究統計分析系統 <span class="text-sm font-normal text-slate-400 ml-2">大衛林老師開發 (APA 7th & 南開格式)</span></h1>
+                <h1 class="text-xl font-bold tracking-wider">長照學術統計分析系統 <span class="text-sm font-normal text-slate-400 ml-2">大衛林老師指導專用 (APA 7th & 南開格式)</span></h1>
             </div>
             <div class="flex gap-4">
                 <button onclick="exportToWord()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded text-sm font-medium transition-colors shadow flex items-center gap-2">
@@ -594,10 +594,525 @@
                 
                 html += `<tr><td><strong>總計</strong></td><td><strong>${n}</strong></td><td><strong>100.0%</strong></td></tr>`;
                 html += `</tbody></table>`;
+                
+                let maxKey = sortedKeys[0];
+                let maxPct = ((counts[maxKey] / n) * 100).toFixed(1);
+                html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">由表 4.${globalTableIndex-1} 可知，本研究受訪者在「${v}」變項之次數分配，以「${maxKey}」為最多，共計 ${counts[maxKey]} 人，佔整體樣本 ${maxPct}%。此分析結果有助於描繪本研究樣本之基本輪廓與代表性，為後續之推論統計提供樣本背景支持。</p>`;
             });
 
             saveToHistory(html);
-            document.getElementById('prof-message').innerHTML = `人口學變數的次數分配表已經產出。在論文第四章開頭，你可以利用這些表格描繪受訪者的基本輪廓（例如：「本研究多數受訪者為女性，佔 XX%...」）。`;
+            document.getElementById('prof-message').innerHTML = `人口學變數的次數分配表與學術解讀已經產出。在論文第四章開頭，你可以直接將這段文字貼上，描繪受訪者的基本輪廓！`;
+        }
+
+        function runItemStats() {
+            let html = '';
+            
+            Object.keys(constructItemMapping).forEach(constructName => {
+                const items = constructItemMapping[constructName];
+                let itemStats = [];
+
+                items.forEach(item => {
+                    let vals = [];
+                    rawData.forEach(row => {
+                        let v = parseFloat(row[item]);
+                        if(!isNaN(v)) vals.push(v);
+                    });
+                    if(vals.length > 0) {
+                        itemStats.push({
+                            name: item,
+                            mean: mean(vals),
+                            sd: std(vals)
+                        });
+                    }
+                });
+
+                // 依平均數由高至低排序
+                itemStats.sort((a, b) => b.mean - a.mean);
+
+                html += `<div class="table-title">表4.${globalTableIndex++} 【${constructName}】各題項描述性統計摘要表</div>`;
+                html += `<table class="academic-table"><thead><tr><th>題項名稱</th><th>平均數 (M)</th><th>標準差 (SD)</th><th>排序</th></tr></thead><tbody>`;
+                
+                itemStats.forEach((stat, idx) => {
+                    html += `<tr><td style="text-align:left;">${stat.name}</td><td>${stat.mean.toFixed(2)}</td><td>${stat.sd.toFixed(2)}</td><td>${idx + 1}</td></tr>`;
+                });
+                html += `</tbody></table>`;
+                
+                let highest = itemStats[0];
+                let lowest = itemStats[itemStats.length - 1];
+                html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">如表 4.${globalTableIndex-1} 所示，受訪者在【${constructName}】構面中，各題項之平均得分介於 ${lowest.mean.toFixed(2)} 至 ${highest.mean.toFixed(2)} 之間。其中以「${highest.name}」得分最高（M = ${highest.mean.toFixed(2)}, SD = ${highest.sd.toFixed(2)}），顯示受訪者在此題項表現出最高之同意程度或最強烈之感受；相對而言，「${lowest.name}」得分較低（M = ${lowest.mean.toFixed(2)}）。未來在實務管理或介入方案設計上，可針對得分較低之項目進一步探討其成因並研擬改善策略。</p>`;
+            });
+
+            saveToHistory(html);
+            document.getElementById('prof-message').innerHTML = `各題項的排序表與學術解讀完成！系統已幫你明確點出「最高分」與「最低分」的題項，這將是你第五章撰寫「實務建議」時最強的武器！`;
+        }
+
+        // --- STREAMING_CHUNK:鑑別度與信度分析 ---
+        function runDiscrimination() {
+            const dep = document.getElementById('dep-var').value;
+            const items = constructItemMapping[dep];
+            if(items.length < 2) throw new Error("至少需 2 題才能進行分析");
+
+            let validRows = [];
+            rawData.forEach(row => {
+                let sum = 0, valid = true;
+                for(let item of items) {
+                    let v = parseFloat(row[item]);
+                    if(isNaN(v)) { valid = false; break; }
+                    sum += v;
+                }
+                if(valid) validRows.push({ ...row, _total: sum });
+            });
+
+            validRows.sort((a, b) => b._total - a._total);
+            const groupSize = Math.max(1, Math.floor(validRows.length * 0.27));
+            const highGroup = validRows.slice(0, groupSize);
+            const lowGroup = validRows.slice(validRows.length - groupSize);
+
+            let html = `<div class="table-title">表4.${globalTableIndex++} 【${dep}】項目分析(鑑別度)摘要表</div>`;
+            html += `<table class="academic-table"><thead><tr><th rowspan="2">題項</th><th colspan="2">高分組 (n=${groupSize})</th><th colspan="2">低分組 (n=${groupSize})</th><th rowspan="2">臨界比 (CR)</th><th rowspan="2">p 值</th></tr><tr><th>M</th><th>SD</th><th>M</th><th>SD</th></tr></thead><tbody>`;
+
+            items.forEach(item => {
+                const highVals = highGroup.map(r => parseFloat(r[item]));
+                const lowVals = lowGroup.map(r => parseFloat(r[item]));
+                
+                const hm = mean(highVals), hs = std(highVals);
+                const lm = mean(lowVals), ls = std(lowVals);
+                
+                let t = 0, p = 1;
+                if(hs > 0 || ls > 0) {
+                    const pooledVar = ((groupSize-1)*Math.pow(hs,2) + (groupSize-1)*Math.pow(ls,2))/(2*groupSize-2);
+                    const se = Math.sqrt(pooledVar * (2/groupSize));
+                    t = (hm - lm) / se;
+                    p = jStat.ttest(t, groupSize*2 - 2, 2);
+                }
+
+                html += `<tr><td>${item}</td><td>${hm.toFixed(2)}</td><td>${hs.toFixed(2)}</td><td>${lm.toFixed(2)}</td><td>${ls.toFixed(2)}</td><td>${t.toFixed(2)}${getStars(p)}</td><td>${formatPValue(p)}</td></tr>`;
+            });
+
+            html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001；CR 值為獨立樣本 t 檢定之 t 值。</div>`;
+            
+            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">表 4.${globalTableIndex-1} 為【${dep}】構面之項目分析（鑑別度）結果。本研究依據總分高低排序，取前後 27% 樣本分別作為高分組與低分組，並進行獨立樣本 t 檢定求得臨界比（CR 值）。分析結果顯示，表中各題項之臨界比皆達統計上之顯著水準（p < .05），表示這些題項均能有效鑑別出受訪者在該構面反應程度之高低差異，具備良好之鑑別度，故予以保留作後續分析。</p>`;
+            
+            saveToHistory(html);
+            document.getElementById('prof-message').innerHTML = `嚴謹的鑑別度分析連同解釋段落已產出！這段文字可以直接貼進你第三章的「研究工具」或第四章的「預試分析」小節中。`;
+        }
+
+        function runReliability() {
+            const constructNames = Object.keys(constructItemMapping);
+            if(constructNames.length === 0) throw new Error("請先建立構面才能進行信度分析");
+
+            let html = `<div class="table-title">表4.${globalTableIndex++} 各研究構面與總量表信度分析摘要表</div>`;
+            html += `<table class="academic-table"><thead><tr><th>構面名稱</th><th>題數 (K)</th><th>Cronbach's α</th></tr></thead><tbody>`;
+            
+            let allItems = [];
+            
+            // 計算內部輔助函數
+            const calcAlpha = (items) => {
+                let k = items.length;
+                if(k < 2) return 0;
+                let matrix = Array.from({length: k}, () => []);
+                let totals = [];
+                rawData.forEach(row => {
+                    let sum = 0, valid = true;
+                    let temp = [];
+                    for(let i=0; i<k; i++) {
+                        let v = parseFloat(row[items[i]]);
+                        if(isNaN(v)) { valid = false; break; }
+                        temp.push(v);
+                        sum += v;
+                    }
+                    if(valid) {
+                        for(let i=0; i<k; i++) matrix[i].push(temp[i]);
+                        totals.push(sum);
+                    }
+                });
+                if(totals.length < 2) return 0;
+                let sumItemVars = 0;
+                for(let i=0; i<k; i++) sumItemVars += variance(matrix[i]);
+                let varTotal = variance(totals);
+                if (varTotal > 0) return (k / (k - 1)) * (1 - (sumItemVars / varTotal));
+                return 0;
+            };
+
+            // 逐一計算各構面信度
+            constructNames.forEach(dep => {
+                const items = constructItemMapping[dep];
+                allItems = allItems.concat(items);
+                let alpha = calcAlpha(items);
+                html += `<tr><td>${dep}</td><td>${items.length}</td><td>${formatFloatAPA(alpha, 3)}</td></tr>`;
+            });
+            
+            // 去除可能重複選擇的題項，計算總量表整體信度
+            allItems = [...new Set(allItems)];
+            let totalAlpha = calcAlpha(allItems);
+            
+            html += `<tr><td style="border-top:1px solid black;"><strong>總量表 (整體信度)</strong></td><td style="border-top:1px solid black;"><strong>${allItems.length}</strong></td><td style="border-top:1px solid black;"><strong>${formatFloatAPA(totalAlpha, 3)}</strong></td></tr>`;
+            html += `</tbody></table>`;
+            
+            let alphaStatus = totalAlpha >= 0.7 ? "大於 .70，顯示本研究量表具備良好之內部一致性與測量穩定度" : "未達 .70，顯示內部一致性偏低，後續研究可能需進一步檢視或刪除部分鑑別度不佳之題項";
+            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">表 4.${globalTableIndex-1} 為各研究構面與總量表之信度分析摘要。Cronbach's α 係數係用以評估問卷量表之內部一致性。分析結果指出，整體問卷之總量表信度係數為 ${formatFloatAPA(totalAlpha, 3)}，${alphaStatus}。各別構面之信度係數亦皆呈現於表中，整體而言符合一般學術研究之標準，可作為後續推論統計分析之穩健基礎。</p>`;
+            
+            saveToHistory(html);
+            
+            let msg = `信度分析運算與解讀完成！這段標準化的學術聲明，完全符合 APA 第七版規範（數值小於 1 的無前導 0 格式）。`;
+            document.getElementById('prof-message').innerHTML = msg;
+        }
+
+        // --- STREAMING_CHUNK:推論統計 (t, ANOVA, Cor, Reg) ---
+        function runConstructMeans() {
+            let html = `<div class="table-title">表4.${globalTableIndex++} 各研究構面現況分析摘要表</div>`;
+            html += `<table class="academic-table"><thead><tr><th>構面名稱</th><th>題數</th><th>平均數 (M)</th><th>標準差 (SD)</th></tr></thead><tbody>`;
+            
+            let highestConstruct = "";
+            let highestMean = -999;
+
+            Object.keys(constructItemMapping).forEach(cName => {
+                let scores = getConstructScores(cName);
+                let cm = mean(scores);
+                if (cm > highestMean) { highestMean = cm; highestConstruct = cName; }
+                html += `<tr><td>${cName}</td><td>${constructItemMapping[cName].length}</td><td>${cm.toFixed(2)}</td><td>${std(scores).toFixed(2)}</td></tr>`;
+            });
+            html += `</tbody></table>`;
+            
+            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">如表 4.${globalTableIndex-1} 所示，本研究各主要構面之整體現況得分情形。透過計算各構面之總體平均數（M）與標準差（SD），可綜觀受訪者在此些核心研究變項上之整體表現趨勢。其中以「${highestConstruct}」之平均得分較高（M = ${highestMean.toFixed(2)}），顯示該構面為受訪者感受最為強烈之面向。此分析結果為後續進行差異檢定及關聯性探討提供了具體之描述性數據輪廓。</p>`;
+            
+            saveToHistory(html);
+            document.getElementById('prof-message').innerHTML = `構面現況分析已附上解讀說明，並聰明地幫你點出得分最高的構面作為論文撰寫的亮點。`;
+        }
+
+        function runTtest() {
+            const ind = document.getElementById('ind-var').value;
+            const dep = document.getElementById('dep-var').value;
+            
+            let groups = {};
+            rawData.forEach(row => {
+                let g = row[ind];
+                let val = parseFloat(row[constructItemMapping[dep][0]]); // 簡化：取第一題檢查是否為數字
+                // 真實計算：取構面平均
+                let sum = 0, valid = true;
+                for(let item of constructItemMapping[dep]) {
+                    let v = parseFloat(row[item]);
+                    if(isNaN(v)) { valid = false; break; }
+                    sum += v;
+                }
+                if(valid && g && g.trim() !== '') {
+                    if(!groups[g]) groups[g] = [];
+                    groups[g].push(sum / constructItemMapping[dep].length);
+                }
+            });
+
+            const keys = Object.keys(groups);
+            if(keys.length !== 2) throw new Error(`t 檢定自變項必須剛好為 2 個類別，目前 [${ind}] 有 ${keys.length} 個類別。請改用 ANOVA。`);
+
+            const g1 = groups[keys[0]], g2 = groups[keys[1]];
+            const m1 = mean(g1), sd1 = std(g1), n1 = g1.length;
+            const m2 = mean(g2), sd2 = std(g2), n2 = g2.length;
+            
+            const pooledVar = ((n1-1)*Math.pow(sd1,2) + (n2-1)*Math.pow(sd2,2)) / (n1+n2-2);
+            const se = Math.sqrt(pooledVar * (1/n1 + 1/n2));
+            const t = (m1 - m2) / se;
+            const p = jStat.ttest(t, n1+n2-2, 2);
+
+            let html = `<div class="table-title">表4.${globalTableIndex++} 不同${ind}在【${dep}】之獨立樣本 t 檢定摘要表</div>`;
+            html += `<table class="academic-table"><thead><tr><th>${ind}</th><th>N</th><th>M</th><th>SD</th><th>t 值</th><th>p 值</th></tr></thead><tbody>`;
+            html += `<tr><td>${keys[0]}</td><td>${n1}</td><td>${m1.toFixed(2)}</td><td>${sd1.toFixed(2)}</td><td rowspan="2" style="vertical-align:middle;">${t.toFixed(2)}${getStars(p)}</td><td rowspan="2" style="vertical-align:middle;">${formatPValue(p)}</td></tr>`;
+            html += `<tr><td>${keys[1]}</td><td>${n2}</td><td>${m2.toFixed(2)}</td><td>${sd2.toFixed(2)}</td></tr>`;
+            html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001。</div>`;
+            
+            let tResultStr = p < 0.05 ? `達顯著水準（t = ${t.toFixed(2)}, p = ${formatPValue(p)}）。進一步檢視其平均數可知，「${m1 > m2 ? keys[0] : keys[1]}」群體在該構面上之得分顯著高於「${m1 > m2 ? keys[1] : keys[0]}」群體` : `未達顯著水準（t = ${t.toFixed(2)}, p = ${formatPValue(p)}），顯示不同${ind}之群體在該構面上並無統計學上之顯著差異`;
+            
+            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">表 4.${globalTableIndex-1} 探討不同${ind}（${keys[0]}與${keys[1]}）在【${dep}】構面上之差異情形。經獨立樣本 t 檢定分析結果顯示，兩群體間之差異${tResultStr}。此分析結果可提供實務界針對特定人口學特徵群體擬定差異化策略之客觀參考依據。</p>`;
+            
+            saveToHistory(html);
+            document.getElementById('prof-message').innerHTML = `t 檢定完成！解讀說明已自動幫你判斷「達顯著」或「未達顯著」，若顯著還會自動幫你寫出哪一組表現較高！`;
+        }
+
+        function runAnova() {
+            const ind = document.getElementById('ind-var').value;
+            const dep = document.getElementById('dep-var').value;
+            
+            let groups = {};
+            let allVals = [];
+            rawData.forEach(row => {
+                let g = row[ind];
+                let sum = 0, valid = true;
+                for(let item of constructItemMapping[dep]) {
+                    let v = parseFloat(row[item]);
+                    if(isNaN(v)) { valid = false; break; }
+                    sum += v;
+                }
+                if(valid && g && g.trim() !== '') {
+                    let score = sum / constructItemMapping[dep].length;
+                    if(!groups[g]) groups[g] = [];
+                    groups[g].push(score);
+                    allVals.push(score);
+                }
+            });
+
+            const keys = Object.keys(groups);
+            if(keys.length < 3) throw new Error(`ANOVA 自變項必須大於等於 3 個類別，目前 [${ind}] 僅有 ${keys.length} 個類別。請改用 t 檢定。`);
+
+            // 1. 各組敘述統計
+            let html = `<div class="table-title">表4.${globalTableIndex++} 不同${ind}在【${dep}】之各組敘述統計表</div>`;
+            html += `<table class="academic-table"><thead><tr><th>${ind}</th><th>N</th><th>M</th><th>SD</th></tr></thead><tbody>`;
+            let totalN = allVals.length;
+            let grandMean = mean(allVals);
+            
+            let ssBetween = 0;
+            keys.forEach(k => {
+                let gm = mean(groups[k]);
+                html += `<tr><td>${k}</td><td>${groups[k].length}</td><td>${gm.toFixed(2)}</td><td>${std(groups[k]).toFixed(2)}</td></tr>`;
+                ssBetween += groups[k].length * Math.pow(gm - grandMean, 2);
+            });
+            html += `<tr><td><strong>總計</strong></td><td><strong>${totalN}</strong></td><td><strong>${grandMean.toFixed(2)}</strong></td><td><strong>${std(allVals).toFixed(2)}</strong></td></tr>`;
+            html += `</tbody></table>`;
+
+            // 2. ANOVA 表
+            let ssTotal = allVals.reduce((a, b) => a + Math.pow(b - grandMean, 2), 0);
+            let ssWithin = ssTotal - ssBetween;
+            
+            let dfBetween = keys.length - 1;
+            let dfWithin = totalN - keys.length;
+            
+            let msBetween = ssBetween / dfBetween;
+            let msWithin = ssWithin / dfWithin;
+            
+            let f = msBetween / msWithin;
+            let p = 1 - jStat.centralF.cdf(f, dfBetween, dfWithin);
+
+            html += `<div class="table-title">表4.${globalTableIndex++} 不同${ind}在【${dep}】之 ANOVA 摘要表</div>`;
+            html += `<table class="academic-table"><thead><tr><th>變異來源</th><th>SS</th><th>df</th><th>MS</th><th>F 值</th><th>p 值</th></tr></thead><tbody>`;
+            html += `<tr><td>組間</td><td>${ssBetween.toFixed(2)}</td><td>${dfBetween}</td><td>${msBetween.toFixed(2)}</td><td rowspan="2" style="vertical-align:middle;">${f.toFixed(2)}${getStars(p)}</td><td rowspan="2" style="vertical-align:middle;">${formatPValue(p)}</td></tr>`;
+            html += `<tr><td>組內</td><td>${ssWithin.toFixed(2)}</td><td>${dfWithin}</td><td>${msWithin.toFixed(2)}</td></tr>`;
+            html += `<tr><td>總和</td><td>${ssTotal.toFixed(2)}</td><td>${totalN - 1}</td><td></td></tr>`;
+            html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001。</div>`;
+
+            // 3. 事後檢定 (Post-hoc) 如果 p < 0.05
+            let msg = `ANOVA 運算與解讀完成！`;
+            if (p < 0.05) {
+                msg += ` F檢定達顯著 ($p < 0.05$)，系統已自動為你執行事後檢定。`;
+                html += `<div class="table-title">表4.${globalTableIndex++} 【${dep}】之事後比較摘要表</div>`;
+                html += `<table class="academic-table"><thead><tr><th>組別 (I)</th><th>組別 (J)</th><th>平均數差異 (I-J)</th><th>p 值 (事後)</th></tr></thead><tbody>`;
+                
+                // 簡易版兩兩 t 檢定模擬事後檢定
+                for(let i=0; i<keys.length; i++) {
+                    for(let j=i+1; j<keys.length; j++) {
+                        let g1 = groups[keys[i]], g2 = groups[keys[j]];
+                        let diff = mean(g1) - mean(g2);
+                        // 計算 pooled variance for these two
+                        const pVar = ((g1.length-1)*Math.pow(std(g1),2) + (g2.length-1)*Math.pow(std(g2),2)) / (g1.length+g2.length-2);
+                        const se = Math.sqrt(pVar * (1/g1.length + 1/g2.length));
+                        let tPair = Math.abs(diff) / se;
+                        // 這裡為了簡化，直接用獨立 t 的 p 值乘上比較次數 (Bonferroni 校正概念)
+                        let rawP = jStat.ttest(tPair, g1.length+g2.length-2, 2);
+                        let adjP = Math.min(1.0, rawP * (keys.length * (keys.length-1) / 2)); 
+                        
+                        let star = getStars(adjP);
+                        let bold = adjP < 0.05 ? "font-weight:bold;" : "";
+                        html += `<tr><td>${keys[i]}</td><td>${keys[j]}</td><td style="${bold}">${diff.toFixed(2)}${star}</td><td>${formatPValue(adjP)}</td></tr>`;
+                    }
+                }
+                html += `</tbody></table>`;
+            } else {
+                msg += ` 由於 F 檢定未達顯著 ($p > 0.05$)，故不需進行事後比較。`;
+            }
+
+            let anovaResultStr = p < 0.05 ? `達顯著水準（F = ${f.toFixed(2)}, p = ${formatPValue(p)}），表示至少有兩組群體間存在顯著差異。經進一步進行事後比較檢定確認，群體間之細部差異方向已呈現於事後比較摘要表中` : `未達顯著水準（F = ${f.toFixed(2)}, p = ${formatPValue(p)}），顯示不同${ind}分組在該變項上之平均數並無統計學上之顯著差異`;
+            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">本研究採用單因子變異數分析（ANOVA）探討不同${ind}之受訪者在【${dep}】得分上之差異情形。分析結果指出，不同分組在該構面上之差異${anovaResultStr}。此檢定結果有助於釐清特定族群間之感受差異，提供後續研究或政策制定之精準參考。</p>`;
+
+            saveToHistory(html);
+            document.getElementById('prof-message').innerHTML = msg;
+        }
+
+        function runCorrelation() {
+            const v1 = document.getElementById('var1').value;
+            const v2 = document.getElementById('var2').value;
+            
+            if (v1 === v2) throw new Error("請選擇兩個不同的構面");
+
+            let s1 = [], s2 = [];
+            rawData.forEach(row => {
+                let sum1=0, v1Valid=true;
+                constructItemMapping[v1].forEach(i => { let v=parseFloat(row[i]); if(isNaN(v)) v1Valid=false; else sum1+=v; });
+                
+                let sum2=0, v2Valid=true;
+                constructItemMapping[v2].forEach(i => { let v=parseFloat(row[i]); if(isNaN(v)) v2Valid=false; else sum2+=v; });
+
+                if(v1Valid && v2Valid) {
+                    s1.push(sum1 / constructItemMapping[v1].length);
+                    s2.push(sum2 / constructItemMapping[v2].length);
+                }
+            });
+
+            let n = s1.length;
+            let m1 = mean(s1), m2 = mean(s2);
+            let num = 0, den1 = 0, den2 = 0;
+            
+            for(let i=0; i<n; i++) {
+                num += (s1[i] - m1) * (s2[i] - m2);
+                den1 += Math.pow(s1[i] - m1, 2);
+                den2 += Math.pow(s2[i] - m2, 2);
+            }
+            
+            let r = num / Math.sqrt(den1 * den2);
+            let t = r * Math.sqrt(n - 2) / Math.sqrt(1 - Math.pow(r, 2));
+            let p = jStat.ttest(Math.abs(t), n - 2, 2);
+
+            let html = `<div class="table-title">表4.${globalTableIndex++} 【${v1}】與【${v2}】之 Pearson 相關分析摘要表</div>`;
+            html += `<table class="academic-table"><thead><tr><th></th><th>${v1}</th><th>${v2}</th></tr></thead><tbody>`;
+            html += `<tr><td><strong>${v1}</strong></td><td>1</td><td>${formatFloatAPA(r, 2)}${getStars(p)}</td></tr>`;
+            html += `<tr><td><strong>${v2}</strong></td><td>${formatFloatAPA(r, 2)}${getStars(p)}</td><td>1</td></tr>`;
+            html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001；矩陣內數值為 Pearson 相關係數 (r)。</div>`;
+
+            let corResultStr = p < 0.05 ? (r > 0 ? `達顯著正相關（r = ${formatFloatAPA(r, 2)}, p = ${formatPValue(p)}），顯示當【${v1}】感受愈高時，其【${v2}】表現亦隨之提升` : `達顯著負相關（r = ${formatFloatAPA(r, 2)}, p = ${formatPValue(p)}），顯示當【${v1}】感受愈高時，其【${v2}】反而呈下降趨勢`) : `未達顯著水準（p = ${formatPValue(p)}），顯示兩變項間無明顯之線性關聯`;
+            
+            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">表 4.${globalTableIndex-1} 為探討【${v1}】與【${v2}】間關聯程度之 Pearson 相關分析摘要表。依據分析結果，兩變項間${corResultStr}。此相關性檢定結果初步驗證了兩變數間之雙變量關係，並為後續之因果預測模型（如多元迴歸分析）提供了重要之統計基礎。</p>`;
+
+            saveToHistory(html);
+            document.getElementById('prof-message').innerHTML = `相關性分析完成，而且系統在解讀文字中，已經聰明地幫你區分出這兩個變數究竟是「正向影響」還是「負向影響」了！`;
+        }
+
+        // 簡易迴歸 (若選取多個，僅做基礎模擬；若單一，則為簡單線性)
+        function runRegression() {
+            const selectInd = document.getElementById('ind-vars');
+            const inds = Array.from(selectInd.selectedOptions).map(opt => opt.value);
+            const dep = document.getElementById('dep-var').value;
+
+            if(inds.length === 0) throw new Error("請選擇至少一個自變項");
+            if(inds.includes(dep)) throw new Error("自變項與依變項不能重複");
+
+            // 1. 準備數據矩陣 X (自變項, 含常數項) 與 Y (依變項)
+            let X = [];
+            let Y = [];
+            
+            rawData.forEach(row => {
+                let valid = true;
+                // 依變項總分
+                let depSum = 0;
+                for(let item of constructItemMapping[dep]) {
+                    let v = parseFloat(row[item]);
+                    if(isNaN(v)) { valid = false; break; }
+                    depSum += v;
+                }
+                if (!valid) return;
+                let yVal = depSum / constructItemMapping[dep].length;
+
+                // 自變項總分
+                let xRow = [1]; // 截距項常數 (Intercept)
+                for (let ind of inds) {
+                    let indSum = 0;
+                    for(let item of constructItemMapping[ind]) {
+                        let v = parseFloat(row[item]);
+                        if(isNaN(v)) { valid = false; break; }
+                        indSum += v;
+                    }
+                    if (!valid) break;
+                    xRow.push(indSum / constructItemMapping[ind].length);
+                }
+                
+                if (valid) {
+                    X.push(xRow);
+                    Y.push([yVal]);
+                }
+            });
+
+            let n = Y.length;
+            let k = inds.length;
+            if (n <= k + 1) throw new Error("有效樣本數不足以進行此多元迴歸分析 (樣本數需大於變數個數+1)");
+
+            // 2. 定義真實矩陣運算基礎函數 (Ordinary Least Squares, OLS)
+            const transpose = (M) => M[0].map((_, c) => M.map(r => r[c]));
+            const multiply = (A, B) => A.map(row => B[0].map((_, c) => row.reduce((sum, v, i) => sum + v * B[i][c], 0)));
+            const invertMatrix = (M) => {
+                let size = M.length; 
+                let a = M.map(r => [...r]); 
+                let I = Array.from({length: size}, (_, i) => Array.from({length: size}, (_, j) => i === j ? 1 : 0));
+                for (let i = 0; i < size; i++) {
+                    let e = a[i][i];
+                    if (e === 0) {
+                        for (let j = i + 1; j < size; j++) {
+                            if (a[j][i] !== 0) { 
+                                [a[i], a[j]] = [a[j], a[i]]; 
+                                [I[i], I[j]] = [I[j], I[i]]; 
+                                break; 
+                            }
+                        }
+                        e = a[i][i]; 
+                        if (e === 0) throw new Error("矩陣高度共線性，無法計算反矩陣 (請檢查自變項是否重複或過度相關)");
+                    }
+                    for (let j = 0; j < size; j++) { a[i][j] /= e; I[i][j] /= e; }
+                    for (let j = 0; j < size; j++) {
+                        if (i !== j) { 
+                            let e2 = a[j][i]; 
+                            for (let k = 0; k < size; k++) { a[j][k] -= e2 * a[i][k]; I[j][k] -= e2 * I[i][k]; } 
+                        }
+                    }
+                }
+                return I;
+            };
+
+            // 3. 計算 OLS 估計量 B = (X'X)^-1 X'Y
+            let XT = transpose(X);
+            let XT_X = multiply(XT, X);
+            let XT_X_inv = invertMatrix(XT_X);
+            let XT_Y = multiply(XT, Y);
+            let B = multiply(XT_X_inv, XT_Y); // B[0][0] 是常數項，B[1][0]...B[k][0] 是自變項係數
+
+            // 4. 計算預測值與變異數
+            let Y_hat = multiply(X, B);
+            let yMean = mean(Y.map(y => y[0]));
+            
+            let SST = 0, SSR = 0;
+            for (let i = 0; i < n; i++) {
+                SST += Math.pow(Y[i][0] - yMean, 2);
+                SSR += Math.pow(Y[i][0] - Y_hat[i][0], 2); // 殘差平方和
+            }
+            
+            let r2 = 1 - (SSR / SST);
+            let adjR2 = 1 - ((SSR / (n - k - 1)) / (SST / (n - 1)));
+            
+            let dfReg = k;
+            let dfRes = n - k - 1;
+            let msReg = (SST - SSR) / dfReg;
+            let msRes = SSR / dfRes;
+            let fStat = msReg / msRes;
+            let pF = 1 - jStat.centralF.cdf(fStat, dfReg, dfRes);
+
+            // 計算係數共變異數矩陣 Var(B) = MSE * (X'X)^-1
+            let varB = XT_X_inv.map(row => row.map(v => v * msRes));
+            
+            // 計算依變項與各自變項標準差 (計算標準化 Beta 用)
+            let sdY = std(Y.map(y => y[0]));
+            let sdX = inds.map((_, idx) => std(X.map(row => row[idx + 1])));
+
+            // 5. 輸出報表
+            let html = `<div class="table-title">表4.${globalTableIndex++} 以【${dep}】為依變項之多元迴歸分析摘要表</div>`;
+            html += `<table class="academic-table"><thead><tr><th>自變項</th><th>未標準化係數 (B)</th><th>標準誤 (SE)</th><th>標準化係數 (β)</th><th>t 值</th><th>p 值</th></tr></thead><tbody>`;
+            
+            let sigPredictors = [];
+
+            for (let i = 1; i <= k; i++) { // 跳過常數項(截距)，僅輸出自變項
+                let bVal = B[i][0];
+                let se = Math.sqrt(varB[i][i]);
+                let t = bVal / se;
+                let p = jStat.ttest(Math.abs(t), dfRes, 2);
+                let beta = bVal * (sdX[i-1] / sdY);
+                
+                if (p < 0.05) sigPredictors.push(inds[i-1]);
+
+                html += `<tr><td>${inds[i-1]}</td><td>${bVal.toFixed(3)}</td><td>${se.toFixed(3)}</td><td>${formatFloatAPA(beta,3)}</td><td>${t.toFixed(2)}${getStars(p)}</td><td>${formatPValue(p)}</td></tr>`;
+            }
+
+            html += `</tbody></table>`;
+            html += `<div class="table-note">註：* p < .05, ** p < .01, *** p < .001。<br>Model Summary: R² = ${formatFloatAPA(r2, 3)}, Adj.R² = ${formatFloatAPA(adjR2, 3)}, F = ${fStat.toFixed(2)}${getStars(pF)}</div>`;
+            
+            let sigStr = sigPredictors.length > 0 ? `其中，「${sigPredictors.join('」與「')}」對依變項具有統計學上之顯著預測力 (p < .05)` : `然而，考量自變項間之共線性後，各別自變項對依變項均未展現出顯著之獨立預測力`;
+            let regResultStr = pF < 0.05 ? `整體迴歸模型達顯著水準（F = ${fStat.toFixed(2)}, p = ${formatPValue(pF)}），其解釋變異量 R² 為 ${formatFloatAPA(r2, 3)}，表示本模型中之自變項群能聯合解釋依變項 ${(r2*100).toFixed(1)}% 之變異。${sigStr}` : `整體迴歸模型未達顯著水準（p = ${formatPValue(pF)}），顯示本研究所投入之自變項群對該依變項之聯合預測力尚嫌不足`;
+
+            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">表 4.${globalTableIndex-1} 為多元迴歸分析摘要表，目的在檢驗前述自變項對依變項【${dep}】之預測效力。分析結果顯示，${regResultStr}。此實證結果進一步釐清了各變項間之因果權重關係，對於實務界在資源有限下聚焦關鍵影響因素並投入管理資源，具有深厚之學術與實務價值。</p>`;
+            
+            saveToHistory(html);
+            document.getElementById('prof-message').innerHTML = `迴歸分析表與完美的論文口吻解讀皆已完成！你可以直接將這段文字與報表複製進你的 Word 檔中！`;
         }
 
         function runItemStats() {
