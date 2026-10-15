@@ -787,7 +787,6 @@
             let groups = {};
             rawData.forEach(row => {
                 let g = row[ind];
-                let val = parseFloat(row[constructItemMapping[dep][0]]); // 簡化：取第一題檢查是否為數字
                 // 真實計算：取構面平均
                 let sum = 0, valid = true;
                 for(let item of constructItemMapping[dep]) {
@@ -972,7 +971,6 @@
             document.getElementById('prof-message').innerHTML = `相關性分析完成，而且系統在解讀文字中，已經聰明地幫你區分出這兩個變數究竟是「正向影響」還是「負向影響」了！`;
         }
 
-        // 簡易迴歸 (若選取多個，僅做基礎模擬；若單一，則為簡單線性)
         function runRegression() {
             const selectInd = document.getElementById('ind-vars');
             const inds = Array.from(selectInd.selectedOptions).map(opt => opt.value);
@@ -987,7 +985,6 @@
             
             rawData.forEach(row => {
                 let valid = true;
-                // 依變項總分
                 let depSum = 0;
                 for(let item of constructItemMapping[dep]) {
                     let v = parseFloat(row[item]);
@@ -997,8 +994,7 @@
                 if (!valid) return;
                 let yVal = depSum / constructItemMapping[dep].length;
 
-                // 自變項總分
-                let xRow = [1]; // 截距項常數 (Intercept)
+                let xRow = [1];
                 for (let ind of inds) {
                     let indSum = 0;
                     for(let item of constructItemMapping[ind]) {
@@ -1020,7 +1016,6 @@
             let k = inds.length;
             if (n <= k + 1) throw new Error("有效樣本數不足以進行此多元迴歸分析 (樣本數需大於變數個數+1)");
 
-            // 2. 定義真實矩陣運算基礎函數 (Ordinary Least Squares, OLS)
             const transpose = (M) => M[0].map((_, c) => M.map(r => r[c]));
             const multiply = (A, B) => A.map(row => B[0].map((_, c) => row.reduce((sum, v, i) => sum + v * B[i][c], 0)));
             const invertMatrix = (M) => {
@@ -1051,21 +1046,19 @@
                 return I;
             };
 
-            // 3. 計算 OLS 估計量 B = (X'X)^-1 X'Y
             let XT = transpose(X);
             let XT_X = multiply(XT, X);
             let XT_X_inv = invertMatrix(XT_X);
             let XT_Y = multiply(XT, Y);
-            let B = multiply(XT_X_inv, XT_Y); // B[0][0] 是常數項，B[1][0]...B[k][0] 是自變項係數
+            let B = multiply(XT_X_inv, XT_Y);
 
-            // 4. 計算預測值與變異數
             let Y_hat = multiply(X, B);
             let yMean = mean(Y.map(y => y[0]));
             
             let SST = 0, SSR = 0;
             for (let i = 0; i < n; i++) {
                 SST += Math.pow(Y[i][0] - yMean, 2);
-                SSR += Math.pow(Y[i][0] - Y_hat[i][0], 2); // 殘差平方和
+                SSR += Math.pow(Y[i][0] - Y_hat[i][0], 2);
             }
             
             let r2 = 1 - (SSR / SST);
@@ -1078,20 +1071,17 @@
             let fStat = msReg / msRes;
             let pF = 1 - jStat.centralF.cdf(fStat, dfReg, dfRes);
 
-            // 計算係數共變異數矩陣 Var(B) = MSE * (X'X)^-1
             let varB = XT_X_inv.map(row => row.map(v => v * msRes));
             
-            // 計算依變項與各自變項標準差 (計算標準化 Beta 用)
             let sdY = std(Y.map(y => y[0]));
             let sdX = inds.map((_, idx) => std(X.map(row => row[idx + 1])));
 
-            // 5. 輸出報表
             let html = `<div class="table-title">表4.${globalTableIndex++} 以【${dep}】為依變項之多元迴歸分析摘要表</div>`;
             html += `<table class="academic-table"><thead><tr><th>自變項</th><th>未標準化係數 (B)</th><th>標準誤 (SE)</th><th>標準化係數 (β)</th><th>t 值</th><th>p 值</th></tr></thead><tbody>`;
             
             let sigPredictors = [];
 
-            for (let i = 1; i <= k; i++) { // 跳過常數項(截距)，僅輸出自變項
+            for (let i = 1; i <= k; i++) {
                 let bVal = B[i][0];
                 let se = Math.sqrt(varB[i][i]);
                 let t = bVal / se;
@@ -1113,483 +1103,6 @@
             
             saveToHistory(html);
             document.getElementById('prof-message').innerHTML = `迴歸分析表與完美的論文口吻解讀皆已完成！你可以直接將這段文字與報表複製進你的 Word 檔中！`;
-        }
-
-        function runItemStats() {
-            let html = '';
-            
-            Object.keys(constructItemMapping).forEach(constructName => {
-                const items = constructItemMapping[constructName];
-                let itemStats = [];
-
-                items.forEach(item => {
-                    let vals = [];
-                    rawData.forEach(row => {
-                        let v = parseFloat(row[item]);
-                        if(!isNaN(v)) vals.push(v);
-                    });
-                    if(vals.length > 0) {
-                        itemStats.push({
-                            name: item,
-                            mean: mean(vals),
-                            sd: std(vals)
-                        });
-                    }
-                });
-
-                // 依平均數由高至低排序
-                itemStats.sort((a, b) => b.mean - a.mean);
-
-                html += `<div class="table-title">表4.${globalTableIndex++} 【${constructName}】各題項描述性統計摘要表</div>`;
-                html += `<table class="academic-table"><thead><tr><th>題項名稱</th><th>平均數 (M)</th><th>標準差 (SD)</th><th>排序</th></tr></thead><tbody>`;
-                
-                itemStats.forEach((stat, idx) => {
-                    html += `<tr><td style="text-align:left;">${stat.name}</td><td>${stat.mean.toFixed(2)}</td><td>${stat.sd.toFixed(2)}</td><td>${idx + 1}</td></tr>`;
-                });
-                html += `</tbody></table>`;
-            });
-
-            saveToHistory(html);
-            document.getElementById('prof-message').innerHTML = `太棒了！系統已經幫你把「每個構面」底下的題項分開製表，並且**自動由高分排到低分**。找出得分最高與最低的題目，將是你第五章撰寫「實務建議」時最強的武器！`;
-        }
-
-        // --- STREAMING_CHUNK:鑑別度與信度分析 ---
-        function runDiscrimination() {
-            const dep = document.getElementById('dep-var').value;
-            const items = constructItemMapping[dep];
-            if(items.length < 2) throw new Error("至少需 2 題才能進行分析");
-
-            let validRows = [];
-            rawData.forEach(row => {
-                let sum = 0, valid = true;
-                for(let item of items) {
-                    let v = parseFloat(row[item]);
-                    if(isNaN(v)) { valid = false; break; }
-                    sum += v;
-                }
-                if(valid) validRows.push({ ...row, _total: sum });
-            });
-
-            validRows.sort((a, b) => b._total - a._total);
-            const groupSize = Math.max(1, Math.floor(validRows.length * 0.27));
-            const highGroup = validRows.slice(0, groupSize);
-            const lowGroup = validRows.slice(validRows.length - groupSize);
-
-            let html = `<div class="table-title">表4.${globalTableIndex++} 【${dep}】項目分析(鑑別度)摘要表</div>`;
-            html += `<table class="academic-table"><thead><tr><th rowspan="2">題項</th><th colspan="2">高分組 (n=${groupSize})</th><th colspan="2">低分組 (n=${groupSize})</th><th rowspan="2">臨界比 (CR)</th><th rowspan="2">p 值</th></tr><tr><th>M</th><th>SD</th><th>M</th><th>SD</th></tr></thead><tbody>`;
-
-            items.forEach(item => {
-                const highVals = highGroup.map(r => parseFloat(r[item]));
-                const lowVals = lowGroup.map(r => parseFloat(r[item]));
-                
-                const hm = mean(highVals), hs = std(highVals);
-                const lm = mean(lowVals), ls = std(lowVals);
-                
-                let t = 0, p = 1;
-                if(hs > 0 || ls > 0) {
-                    const pooledVar = ((groupSize-1)*Math.pow(hs,2) + (groupSize-1)*Math.pow(ls,2))/(2*groupSize-2);
-                    const se = Math.sqrt(pooledVar * (2/groupSize));
-                    t = (hm - lm) / se;
-                    p = jStat.ttest(t, groupSize*2 - 2, 2);
-                }
-
-                html += `<tr><td>${item}</td><td>${hm.toFixed(2)}</td><td>${hs.toFixed(2)}</td><td>${lm.toFixed(2)}</td><td>${ls.toFixed(2)}</td><td>${t.toFixed(2)}${getStars(p)}</td><td>${formatPValue(p)}</td></tr>`;
-            });
-
-            html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001；CR 值為獨立樣本 t 檢定之 t 值。</div>`;
-            saveToHistory(html);
-            document.getElementById('prof-message').innerHTML = `這就是嚴謹的「鑑別度分析（項目分析）」。如果 CR 值的 p 值沒有達到顯著水準（> .05），代表這題無法鑑別出長者的感受差異，你可能需要考慮將它刪除喔！`;
-        }
-
-        function runReliability() {
-            const constructNames = Object.keys(constructItemMapping);
-            if(constructNames.length === 0) throw new Error("請先建立構面才能進行信度分析");
-
-            let html = `<div class="table-title">表4.${globalTableIndex++} 各研究構面與總量表信度分析摘要表</div>`;
-            html += `<table class="academic-table"><thead><tr><th>構面名稱</th><th>題數 (K)</th><th>Cronbach's α</th></tr></thead><tbody>`;
-            
-            let allItems = [];
-            
-            // 計算內部輔助函數
-            const calcAlpha = (items) => {
-                let k = items.length;
-                if(k < 2) return 0;
-                let matrix = Array.from({length: k}, () => []);
-                let totals = [];
-                rawData.forEach(row => {
-                    let sum = 0, valid = true;
-                    let temp = [];
-                    for(let i=0; i<k; i++) {
-                        let v = parseFloat(row[items[i]]);
-                        if(isNaN(v)) { valid = false; break; }
-                        temp.push(v);
-                        sum += v;
-                    }
-                    if(valid) {
-                        for(let i=0; i<k; i++) matrix[i].push(temp[i]);
-                        totals.push(sum);
-                    }
-                });
-                if(totals.length < 2) return 0;
-                let sumItemVars = 0;
-                for(let i=0; i<k; i++) sumItemVars += variance(matrix[i]);
-                let varTotal = variance(totals);
-                if (varTotal > 0) return (k / (k - 1)) * (1 - (sumItemVars / varTotal));
-                return 0;
-            };
-
-            // 逐一計算各構面信度
-            constructNames.forEach(dep => {
-                const items = constructItemMapping[dep];
-                allItems = allItems.concat(items);
-                let alpha = calcAlpha(items);
-                html += `<tr><td>${dep}</td><td>${items.length}</td><td>${formatFloatAPA(alpha, 3)}</td></tr>`;
-            });
-            
-            // 去除可能重複選擇的題項，計算總量表整體信度
-            allItems = [...new Set(allItems)];
-            let totalAlpha = calcAlpha(allItems);
-            
-            html += `<tr><td style="border-top:1px solid black;"><strong>總量表 (整體信度)</strong></td><td style="border-top:1px solid black;"><strong>${allItems.length}</strong></td><td style="border-top:1px solid black;"><strong>${formatFloatAPA(totalAlpha, 3)}</strong></td></tr>`;
-            html += `</tbody></table>`;
-            
-            saveToHistory(html);
-            
-            let msg = `信度分析運算完成！系統已為你整合為標準的學術摘要表，包含各別構面與<b>總量表信度（Cronbach's α = ${formatFloatAPA(totalAlpha, 3)}）</b>。`;
-            if(totalAlpha >= 0.7) msg += ` <br><span class="text-emerald-700 font-bold"><i class="fa-solid fa-check"></i> 整體信度良好！</span> 大於 .70 代表整份問卷的內部一致性相當高。`;
-            else msg += ` <br><span class="text-red-700 font-bold"><i class="fa-solid fa-triangle-exclamation"></i> 整體信度偏低。</span> 一般建議需大於 .70，請回頭檢查鑑別度分析，看看是否有需要剔除的不良題項。`;
-            document.getElementById('prof-message').innerHTML = msg;
-        }
-
-        // --- STREAMING_CHUNK:推論統計 (t, ANOVA, Cor, Reg) ---
-        function runConstructMeans() {
-            let html = `<div class="table-title">表4.${globalTableIndex++} 各研究構面現況分析摘要表</div>`;
-            html += `<table class="academic-table"><thead><tr><th>構面名稱</th><th>題數</th><th>平均數 (M)</th><th>標準差 (SD)</th></tr></thead><tbody>`;
-            
-            Object.keys(constructItemMapping).forEach(cName => {
-                let scores = getConstructScores(cName);
-                html += `<tr><td>${cName}</td><td>${constructItemMapping[cName].length}</td><td>${mean(scores).toFixed(2)}</td><td>${std(scores).toFixed(2)}</td></tr>`;
-            });
-            html += `</tbody></table>`;
-            saveToHistory(html);
-            document.getElementById('prof-message').innerHTML = `這是各構面的總體平均分數，適合用來比較受訪者在不同大概念上的感受強弱。`;
-        }
-
-        function runTtest() {
-            const ind = document.getElementById('ind-var').value;
-            const dep = document.getElementById('dep-var').value;
-            
-            let groups = {};
-            rawData.forEach(row => {
-                let g = row[ind];
-                let val = parseFloat(row[constructItemMapping[dep][0]]); // 簡化：取第一題檢查是否為數字
-                // 真實計算：取構面平均
-                let sum = 0, valid = true;
-                for(let item of constructItemMapping[dep]) {
-                    let v = parseFloat(row[item]);
-                    if(isNaN(v)) { valid = false; break; }
-                    sum += v;
-                }
-                if(valid && g && g.trim() !== '') {
-                    if(!groups[g]) groups[g] = [];
-                    groups[g].push(sum / constructItemMapping[dep].length);
-                }
-            });
-
-            const keys = Object.keys(groups);
-            if(keys.length !== 2) throw new Error(`t 檢定自變項必須剛好為 2 個類別，目前 [${ind}] 有 ${keys.length} 個類別。請改用 ANOVA。`);
-
-            const g1 = groups[keys[0]], g2 = groups[keys[1]];
-            const m1 = mean(g1), sd1 = std(g1), n1 = g1.length;
-            const m2 = mean(g2), sd2 = std(g2), n2 = g2.length;
-            
-            const pooledVar = ((n1-1)*Math.pow(sd1,2) + (n2-1)*Math.pow(sd2,2)) / (n1+n2-2);
-            const se = Math.sqrt(pooledVar * (1/n1 + 1/n2));
-            const t = (m1 - m2) / se;
-            const p = jStat.ttest(t, n1+n2-2, 2);
-
-            let html = `<div class="table-title">表4.${globalTableIndex++} 不同${ind}在【${dep}】之獨立樣本 t 檢定摘要表</div>`;
-            html += `<table class="academic-table"><thead><tr><th>${ind}</th><th>N</th><th>M</th><th>SD</th><th>t 值</th><th>p 值</th></tr></thead><tbody>`;
-            html += `<tr><td>${keys[0]}</td><td>${n1}</td><td>${m1.toFixed(2)}</td><td>${sd1.toFixed(2)}</td><td rowspan="2" style="vertical-align:middle;">${t.toFixed(2)}${getStars(p)}</td><td rowspan="2" style="vertical-align:middle;">${formatPValue(p)}</td></tr>`;
-            html += `<tr><td>${keys[1]}</td><td>${n2}</td><td>${m2.toFixed(2)}</td><td>${sd2.toFixed(2)}</td></tr>`;
-            html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001。</div>`;
-            
-            saveToHistory(html);
-            document.getElementById('prof-message').innerHTML = `t 檢定完成！注意看 p 值是否小於 .05。如果是的話，看看 M (平均數) 哪一組比較高，這就是你結論要寫的重點。`;
-        }
-
-        function runAnova() {
-            const ind = document.getElementById('ind-var').value;
-            const dep = document.getElementById('dep-var').value;
-            
-            let groups = {};
-            let allVals = [];
-            rawData.forEach(row => {
-                let g = row[ind];
-                let sum = 0, valid = true;
-                for(let item of constructItemMapping[dep]) {
-                    let v = parseFloat(row[item]);
-                    if(isNaN(v)) { valid = false; break; }
-                    sum += v;
-                }
-                if(valid && g && g.trim() !== '') {
-                    let score = sum / constructItemMapping[dep].length;
-                    if(!groups[g]) groups[g] = [];
-                    groups[g].push(score);
-                    allVals.push(score);
-                }
-            });
-
-            const keys = Object.keys(groups);
-            if(keys.length < 3) throw new Error(`ANOVA 自變項必須大於等於 3 個類別，目前 [${ind}] 僅有 ${keys.length} 個類別。請改用 t 檢定。`);
-
-            // 1. 各組敘述統計
-            let html = `<div class="table-title">表4.${globalTableIndex++} 不同${ind}在【${dep}】之各組敘述統計表</div>`;
-            html += `<table class="academic-table"><thead><tr><th>${ind}</th><th>N</th><th>M</th><th>SD</th></tr></thead><tbody>`;
-            let totalN = allVals.length;
-            let grandMean = mean(allVals);
-            
-            let ssBetween = 0;
-            keys.forEach(k => {
-                let gm = mean(groups[k]);
-                html += `<tr><td>${k}</td><td>${groups[k].length}</td><td>${gm.toFixed(2)}</td><td>${std(groups[k]).toFixed(2)}</td></tr>`;
-                ssBetween += groups[k].length * Math.pow(gm - grandMean, 2);
-            });
-            html += `<tr><td><strong>總計</strong></td><td><strong>${totalN}</strong></td><td><strong>${grandMean.toFixed(2)}</strong></td><td><strong>${std(allVals).toFixed(2)}</strong></td></tr>`;
-            html += `</tbody></table>`;
-
-            // 2. ANOVA 表
-            let ssTotal = allVals.reduce((a, b) => a + Math.pow(b - grandMean, 2), 0);
-            let ssWithin = ssTotal - ssBetween;
-            
-            let dfBetween = keys.length - 1;
-            let dfWithin = totalN - keys.length;
-            
-            let msBetween = ssBetween / dfBetween;
-            let msWithin = ssWithin / dfWithin;
-            
-            let f = msBetween / msWithin;
-            let p = 1 - jStat.centralF.cdf(f, dfBetween, dfWithin);
-
-            html += `<div class="table-title">表4.${globalTableIndex++} 不同${ind}在【${dep}】之 ANOVA 摘要表</div>`;
-            html += `<table class="academic-table"><thead><tr><th>變異來源</th><th>SS</th><th>df</th><th>MS</th><th>F 值</th><th>p 值</th></tr></thead><tbody>`;
-            html += `<tr><td>組間</td><td>${ssBetween.toFixed(2)}</td><td>${dfBetween}</td><td>${msBetween.toFixed(2)}</td><td rowspan="2" style="vertical-align:middle;">${f.toFixed(2)}${getStars(p)}</td><td rowspan="2" style="vertical-align:middle;">${formatPValue(p)}</td></tr>`;
-            html += `<tr><td>組內</td><td>${ssWithin.toFixed(2)}</td><td>${dfWithin}</td><td>${msWithin.toFixed(2)}</td></tr>`;
-            html += `<tr><td>總和</td><td>${ssTotal.toFixed(2)}</td><td>${totalN - 1}</td><td></td></tr>`;
-            html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001。</div>`;
-
-            // 3. 事後檢定 (Post-hoc) 如果 p < 0.05
-            let msg = `ANOVA 運算完成！`;
-            if (p < 0.05) {
-                msg += ` F檢定達顯著 ($p < 0.05$)，系統已自動為你執行事後檢定。`;
-                html += `<div class="table-title">表4.${globalTableIndex++} 【${dep}】之事後比較摘要表</div>`;
-                html += `<table class="academic-table"><thead><tr><th>組別 (I)</th><th>組別 (J)</th><th>平均數差異 (I-J)</th><th>p 值 (事後)</th></tr></thead><tbody>`;
-                
-                // 簡易版兩兩 t 檢定模擬事後檢定
-                for(let i=0; i<keys.length; i++) {
-                    for(let j=i+1; j<keys.length; j++) {
-                        let g1 = groups[keys[i]], g2 = groups[keys[j]];
-                        let diff = mean(g1) - mean(g2);
-                        // 計算 pooled variance for these two
-                        const pVar = ((g1.length-1)*Math.pow(std(g1),2) + (g2.length-1)*Math.pow(std(g2),2)) / (g1.length+g2.length-2);
-                        const se = Math.sqrt(pVar * (1/g1.length + 1/g2.length));
-                        let tPair = Math.abs(diff) / se;
-                        // 這裡為了簡化，直接用獨立 t 的 p 值乘上比較次數 (Bonferroni 校正概念)
-                        let rawP = jStat.ttest(tPair, g1.length+g2.length-2, 2);
-                        let adjP = Math.min(1.0, rawP * (keys.length * (keys.length-1) / 2)); 
-                        
-                        let star = getStars(adjP);
-                        let bold = adjP < 0.05 ? "font-weight:bold;" : "";
-                        html += `<tr><td>${keys[i]}</td><td>${keys[j]}</td><td style="${bold}">${diff.toFixed(2)}${star}</td><td>${formatPValue(adjP)}</td></tr>`;
-                    }
-                }
-                html += `</tbody></table>`;
-            } else {
-                msg += ` 由於 F 檢定未達顯著 ($p > 0.05$)，故不需進行事後比較。`;
-            }
-
-            saveToHistory(html);
-            document.getElementById('prof-message').innerHTML = msg;
-        }
-
-        function runCorrelation() {
-            const v1 = document.getElementById('var1').value;
-            const v2 = document.getElementById('var2').value;
-            
-            if (v1 === v2) throw new Error("請選擇兩個不同的構面");
-
-            let s1 = [], s2 = [];
-            rawData.forEach(row => {
-                let sum1=0, v1Valid=true;
-                constructItemMapping[v1].forEach(i => { let v=parseFloat(row[i]); if(isNaN(v)) v1Valid=false; else sum1+=v; });
-                
-                let sum2=0, v2Valid=true;
-                constructItemMapping[v2].forEach(i => { let v=parseFloat(row[i]); if(isNaN(v)) v2Valid=false; else sum2+=v; });
-
-                if(v1Valid && v2Valid) {
-                    s1.push(sum1 / constructItemMapping[v1].length);
-                    s2.push(sum2 / constructItemMapping[v2].length);
-                }
-            });
-
-            let n = s1.length;
-            let m1 = mean(s1), m2 = mean(s2);
-            let num = 0, den1 = 0, den2 = 0;
-            
-            for(let i=0; i<n; i++) {
-                num += (s1[i] - m1) * (s2[i] - m2);
-                den1 += Math.pow(s1[i] - m1, 2);
-                den2 += Math.pow(s2[i] - m2, 2);
-            }
-            
-            let r = num / Math.sqrt(den1 * den2);
-            let t = r * Math.sqrt(n - 2) / Math.sqrt(1 - Math.pow(r, 2));
-            let p = jStat.ttest(Math.abs(t), n - 2, 2);
-
-            let html = `<div class="table-title">表4.${globalTableIndex++} 【${v1}】與【${v2}】之 Pearson 相關分析摘要表</div>`;
-            html += `<table class="academic-table"><thead><tr><th></th><th>${v1}</th><th>${v2}</th></tr></thead><tbody>`;
-            html += `<tr><td><strong>${v1}</strong></td><td>1</td><td>${formatFloatAPA(r, 2)}${getStars(p)}</td></tr>`;
-            html += `<tr><td><strong>${v2}</strong></td><td>${formatFloatAPA(r, 2)}${getStars(p)}</td><td>1</td></tr>`;
-            html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001；矩陣內數值為 Pearson 相關係數 (r)。</div>`;
-
-            saveToHistory(html);
-            let msg = `Pearson 相關分析完成。相關係數 $r$ 為 <b>${formatFloatAPA(r,2)}</b>，`;
-            msg += (p < 0.05) ? `呈現顯著相關！請留意數值前面的正負號，這決定了兩者是正向影響還是負向影響。` : `未達顯著。`;
-            document.getElementById('prof-message').innerHTML = msg;
-        }
-
-        // 簡易迴歸 (若選取多個，僅做基礎模擬；若單一，則為簡單線性)
-        function runRegression() {
-            const selectInd = document.getElementById('ind-vars');
-            const inds = Array.from(selectInd.selectedOptions).map(opt => opt.value);
-            const dep = document.getElementById('dep-var').value;
-
-            if(inds.length === 0) throw new Error("請選擇至少一個自變項");
-            if(inds.includes(dep)) throw new Error("自變項與依變項不能重複");
-
-            // 1. 準備數據矩陣 X (自變項, 含常數項) 與 Y (依變項)
-            let X = [];
-            let Y = [];
-            
-            rawData.forEach(row => {
-                let valid = true;
-                // 依變項總分
-                let depSum = 0;
-                for(let item of constructItemMapping[dep]) {
-                    let v = parseFloat(row[item]);
-                    if(isNaN(v)) { valid = false; break; }
-                    depSum += v;
-                }
-                if (!valid) return;
-                let yVal = depSum / constructItemMapping[dep].length;
-
-                // 自變項總分
-                let xRow = [1]; // 截距項常數 (Intercept)
-                for (let ind of inds) {
-                    let indSum = 0;
-                    for(let item of constructItemMapping[ind]) {
-                        let v = parseFloat(row[item]);
-                        if(isNaN(v)) { valid = false; break; }
-                        indSum += v;
-                    }
-                    if (!valid) break;
-                    xRow.push(indSum / constructItemMapping[ind].length);
-                }
-                
-                if (valid) {
-                    X.push(xRow);
-                    Y.push([yVal]);
-                }
-            });
-
-            let n = Y.length;
-            let k = inds.length;
-            if (n <= k + 1) throw new Error("有效樣本數不足以進行此多元迴歸分析 (樣本數需大於變數個數+1)");
-
-            // 2. 定義真實矩陣運算基礎函數 (Ordinary Least Squares, OLS)
-            const transpose = (M) => M[0].map((_, c) => M.map(r => r[c]));
-            const multiply = (A, B) => A.map(row => B[0].map((_, c) => row.reduce((sum, v, i) => sum + v * B[i][c], 0)));
-            const invertMatrix = (M) => {
-                let size = M.length; 
-                let a = M.map(r => [...r]); 
-                let I = Array.from({length: size}, (_, i) => Array.from({length: size}, (_, j) => i === j ? 1 : 0));
-                for (let i = 0; i < size; i++) {
-                    let e = a[i][i];
-                    if (e === 0) {
-                        for (let j = i + 1; j < size; j++) {
-                            if (a[j][i] !== 0) { 
-                                [a[i], a[j]] = [a[j], a[i]]; 
-                                [I[i], I[j]] = [I[j], I[i]]; 
-                                break; 
-                            }
-                        }
-                        e = a[i][i]; 
-                        if (e === 0) throw new Error("矩陣高度共線性，無法計算反矩陣 (請檢查自變項是否重複或過度相關)");
-                    }
-                    for (let j = 0; j < size; j++) { a[i][j] /= e; I[i][j] /= e; }
-                    for (let j = 0; j < size; j++) {
-                        if (i !== j) { 
-                            let e2 = a[j][i]; 
-                            for (let k = 0; k < size; k++) { a[j][k] -= e2 * a[i][k]; I[j][k] -= e2 * I[i][k]; } 
-                        }
-                    }
-                }
-                return I;
-            };
-
-            // 3. 計算 OLS 估計量 B = (X'X)^-1 X'Y
-            let XT = transpose(X);
-            let XT_X = multiply(XT, X);
-            let XT_X_inv = invertMatrix(XT_X);
-            let XT_Y = multiply(XT, Y);
-            let B = multiply(XT_X_inv, XT_Y); // B[0][0] 是常數項，B[1][0]...B[k][0] 是自變項係數
-
-            // 4. 計算預測值與變異數
-            let Y_hat = multiply(X, B);
-            let yMean = mean(Y.map(y => y[0]));
-            
-            let SST = 0, SSR = 0;
-            for (let i = 0; i < n; i++) {
-                SST += Math.pow(Y[i][0] - yMean, 2);
-                SSR += Math.pow(Y[i][0] - Y_hat[i][0], 2); // 殘差平方和
-            }
-            
-            let r2 = 1 - (SSR / SST);
-            let adjR2 = 1 - ((SSR / (n - k - 1)) / (SST / (n - 1)));
-            
-            let dfReg = k;
-            let dfRes = n - k - 1;
-            let msReg = (SST - SSR) / dfReg;
-            let msRes = SSR / dfRes;
-            let fStat = msReg / msRes;
-            let pF = 1 - jStat.centralF.cdf(fStat, dfReg, dfRes);
-
-            // 計算係數共變異數矩陣 Var(B) = MSE * (X'X)^-1
-            let varB = XT_X_inv.map(row => row.map(v => v * msRes));
-            
-            // 計算依變項與各自變項標準差 (計算標準化 Beta 用)
-            let sdY = std(Y.map(y => y[0]));
-            let sdX = inds.map((_, idx) => std(X.map(row => row[idx + 1])));
-
-            // 5. 輸出報表
-            let html = `<div class="table-title">表4.${globalTableIndex++} 以【${dep}】為依變項之多元迴歸分析摘要表</div>`;
-            html += `<table class="academic-table"><thead><tr><th>自變項</th><th>未標準化係數 (B)</th><th>標準誤 (SE)</th><th>標準化係數 (β)</th><th>t 值</th><th>p 值</th></tr></thead><tbody>`;
-            
-            for (let i = 1; i <= k; i++) { // 跳過常數項(截距)，僅輸出自變項
-                let bVal = B[i][0];
-                let se = Math.sqrt(varB[i][i]);
-                let t = bVal / se;
-                let p = jStat.ttest(Math.abs(t), dfRes, 2);
-                let beta = bVal * (sdX[i-1] / sdY);
-                
-                html += `<tr><td>${inds[i-1]}</td><td>${bVal.toFixed(3)}</td><td>${se.toFixed(3)}</td><td>${formatFloatAPA(beta,3)}</td><td>${t.toFixed(2)}${getStars(p)}</td><td>${formatPValue(p)}</td></tr>`;
-            }
-
-            html += `</tbody></table>`;
-            html += `<div class="table-note">註：* p < .05, ** p < .01, *** p < .001。<br>Model Summary: R² = ${formatFloatAPA(r2, 3)}, Adj.R² = ${formatFloatAPA(adjR2, 3)}, F = ${fStat.toFixed(2)}${getStars(pF)}</div>`;
-            
-            saveToHistory(html);
-            document.getElementById('prof-message').innerHTML = `真實多元迴歸矩陣運算完成！模型整體的 $R^2$ 為 <b>${formatFloatAPA(r2, 3)}</b>，這代表你的自變項群能解釋依變項 ${(r2*100).toFixed(1)}% 的變異量。接下來請觀察哪一個自變項的 $\\beta$ 係數絕對值最大且達顯著，那就是影響力最強的關鍵因素！`;
         }
 
         // 初始化
