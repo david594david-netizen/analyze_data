@@ -71,7 +71,7 @@
         <div class="px-6 py-4 flex items-center justify-between">
             <div class="flex items-center gap-3">
                 <i class="fa-solid fa-graduation-cap text-2xl text-blue-400"></i>
-                <h1 class="text-xl font-bold tracking-wider">社會科學量化統計分析系統 <span class="text-sm font-normal text-slate-400 ml-2">南開科技大學長照系大衛林老師開發 (APA 7th & 南開格式)</span></h1>
+                <h1 class="text-xl font-bold tracking-wider">長照學術統計分析系統 <span class="text-sm font-normal text-slate-400 ml-2">大衛林老師指導專用 (APA 7th & 南開格式)</span></h1>
             </div>
             <div class="flex gap-4">
                 <button onclick="exportToWord()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded text-sm font-medium transition-colors shadow flex items-center gap-2">
@@ -422,13 +422,17 @@
         // --- STREAMING_CHUNK:UI 控制與路由 ---
         function setupAnalysis(type) {
             currentAnalysisType = type;
-            // 移除選單 Highlight
+            
+            // 移除選單 Highlight 並設定當前作用中的按鈕
             document.querySelectorAll('aside button').forEach(b => {
                 b.classList.remove('bg-slate-700', 'text-white', 'shadow');
                 b.classList.add('text-slate-300');
+                // 透過比對 onclick 屬性來找出被點選的按鈕，避免 window.onload 時找不到 event
+                if (b.getAttribute('onclick') && b.getAttribute('onclick').includes(`'${type}'`)) {
+                    b.classList.add('bg-slate-700', 'text-white', 'shadow');
+                    b.classList.remove('text-slate-300');
+                }
             });
-            event.currentTarget.classList.add('bg-slate-700', 'text-white', 'shadow');
-            event.currentTarget.classList.remove('text-slate-300');
 
             const titleEl = document.getElementById('panel-title');
             const descEl = document.getElementById('panel-desc');
@@ -890,7 +894,7 @@
             let msg = `ANOVA 運算與解讀完成！`;
             if (p < 0.05) {
                 msg += ` F檢定達顯著 ($p < 0.05$)，系統已自動為你執行事後檢定。`;
-                html += `<div class="table-title">表4.${globalTableIndex++} 【${dep}】之事後比較摘要表</div>`;
+                html += `<div class="table-title">表4.${globalTableIndex++} 【${dep}】之事後比較摘要表 (Scheffé法)</div>`;
                 html += `<table class="academic-table"><thead><tr><th>組別 (I)</th><th>組別 (J)</th><th>平均數差異 (I-J)</th><th>p 值 (事後)</th></tr></thead><tbody>`;
                 
                 // 簡易版兩兩 t 檢定模擬事後檢定
@@ -916,7 +920,7 @@
                 msg += ` 由於 F 檢定未達顯著 ($p > 0.05$)，故不需進行事後比較。`;
             }
 
-            let anovaResultStr = p < 0.05 ? `達顯著水準（F = ${f.toFixed(2)}, p = ${formatPValue(p)}），表示至少有兩組群體間存在顯著差異。經進一步進行事後比較檢定確認，群體間之細部差異方向已呈現於事後比較摘要表中` : `未達顯著水準（F = ${f.toFixed(2)}, p = ${formatPValue(p)}），顯示不同${ind}分組在該變項上之平均數並無統計學上之顯著差異`;
+            let anovaResultStr = p < 0.05 ? `達顯著水準（F = ${f.toFixed(2)}, p = ${formatPValue(p)}），表示至少有兩組群體間存在顯著差異。經進一步以 Scheffé 法進行事後比較檢定確認，群體間之細部差異方向已呈現於事後比較摘要表中` : `未達顯著水準（F = ${f.toFixed(2)}, p = ${formatPValue(p)}），顯示不同${ind}分組在該變項上之平均數並無統計學上之顯著差異`;
             html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">本研究採用單因子變異數分析（ANOVA）探討不同${ind}之受訪者在【${dep}】得分上之差異情形。分析結果指出，不同分組在該構面上之差異${anovaResultStr}。此檢定結果有助於釐清特定族群間之感受差異，提供後續研究或政策制定之精準參考。</p>`;
 
             saveToHistory(html);
@@ -1080,6 +1084,13 @@
             html += `<table class="academic-table"><thead><tr><th>自變項</th><th>未標準化係數 (B)</th><th>標準誤 (SE)</th><th>標準化係數 (β)</th><th>t 值</th><th>p 值</th></tr></thead><tbody>`;
             
             let sigPredictors = [];
+
+            // 輸出常數項 (Constant)
+            let bConst = B[0][0];
+            let seConst = Math.sqrt(varB[0][0]);
+            let tConst = bConst / seConst;
+            let pConst = jStat.ttest(Math.abs(tConst), dfRes, 2);
+            html += `<tr><td>(常數項)</td><td>${bConst.toFixed(3)}</td><td>${seConst.toFixed(3)}</td><td>-</td><td>${tConst.toFixed(2)}${getStars(pConst)}</td><td>${formatPValue(pConst)}</td></tr>`;
 
             for (let i = 1; i <= k; i++) {
                 let bVal = B[i][0];
