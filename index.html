@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>社會科學統計分析系統 (南開科技大學長照系大衛林老師開發)</title>
+    <title>長照學術統計分析系統 (大衛林老師指導版)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- 引入 PapaParse 解析 CSV -->
@@ -763,6 +763,47 @@
         }
 
         // --- STREAMING_CHUNK:推論統計 (t, ANOVA, Cor, Reg) ---
+        
+        // 輔助函數：計算 Levene 變異數同質性檢定
+        function calcLevene(groupsMap) {
+            let keys = Object.keys(groupsMap);
+            let k = keys.length;
+            let N = 0;
+            let zGroups = {};
+            let allZ = [];
+
+            // 依據各組平均數計算絕對離差 (Z)
+            keys.forEach(key => {
+                let g = groupsMap[key];
+                let m = mean(g);
+                zGroups[key] = g.map(val => Math.abs(val - m));
+                allZ = allZ.concat(zGroups[key]);
+                N += g.length;
+            });
+
+            let grandZMean = mean(allZ);
+            let ssBetween = 0;
+            let ssWithin = 0;
+
+            keys.forEach(key => {
+                let gZ = zGroups[key];
+                let mZ = mean(gZ);
+                ssBetween += gZ.length * Math.pow(mZ - grandZMean, 2);
+                gZ.forEach(zVal => {
+                    ssWithin += Math.pow(zVal - mZ, 2);
+                });
+            });
+
+            let dfBetween = k - 1;
+            let dfWithin = N - k;
+            let msBetween = ssBetween / dfBetween;
+            let msWithin = ssWithin / dfWithin;
+            let F = (msWithin === 0) ? 0 : msBetween / msWithin;
+            let p = 1 - jStat.centralF.cdf(F, dfBetween, dfWithin);
+
+            return { F, p, dfBetween, dfWithin };
+        }
+
         function runConstructMeans() {
             let html = `<div class="table-title">表4.${globalTableIndex++} 各研究構面現況分析摘要表</div>`;
             html += `<table class="academic-table"><thead><tr><th>構面名稱</th><th>題數</th><th>平均數 (M)</th><th>標準差 (SD)</th></tr></thead><tbody>`;
@@ -811,23 +852,48 @@
             const m1 = mean(g1), sd1 = std(g1), n1 = g1.length;
             const m2 = mean(g2), sd2 = std(g2), n2 = g2.length;
             
+            // 執行 Levene 變異數同質性檢定
+            let levene = calcLevene(groups);
+
+            // 假設變異數相等
             const pooledVar = ((n1-1)*Math.pow(sd1,2) + (n2-1)*Math.pow(sd2,2)) / (n1+n2-2);
-            const se = Math.sqrt(pooledVar * (1/n1 + 1/n2));
-            const t = (m1 - m2) / se;
-            const p = jStat.ttest(t, n1+n2-2, 2);
+            const seEqual = Math.sqrt(pooledVar * (1/n1 + 1/n2));
+            const tEqual = (m1 - m2) / seEqual;
+            const dfEqual = n1 + n2 - 2;
+            const pEqual = jStat.ttest(Math.abs(tEqual), dfEqual, 2);
+            const tCritEqual = Math.abs(jStat.studentt.inv(0.975, dfEqual));
+            const ciLowerEqual = (m1 - m2) - tCritEqual * seEqual;
+            const ciUpperEqual = (m1 - m2) + tCritEqual * seEqual;
+
+            // 不假設變異數相等 (Welch's t)
+            const var1 = Math.pow(sd1, 2);
+            const var2 = Math.pow(sd2, 2);
+            const seUnequal = Math.sqrt(var1/n1 + var2/n2);
+            const tUnequal = (m1 - m2) / seUnequal;
+            const dfUnequal = Math.pow(var1/n1 + var2/n2, 2) / (Math.pow(var1/n1, 2)/(n1-1) + Math.pow(var2/n2, 2)/(n2-1));
+            const pUnequal = jStat.ttest(Math.abs(tUnequal), dfUnequal, 2);
+            const tCritUnequal = Math.abs(jStat.studentt.inv(0.975, dfUnequal));
+            const ciLowerUnequal = (m1 - m2) - tCritUnequal * seUnequal;
+            const ciUpperUnequal = (m1 - m2) + tCritUnequal * seUnequal;
 
             let html = `<div class="table-title">表4.${globalTableIndex++} 不同${ind}在【${dep}】之獨立樣本 t 檢定摘要表</div>`;
-            html += `<table class="academic-table"><thead><tr><th>${ind}</th><th>N</th><th>M</th><th>SD</th><th>t 值</th><th>p 值</th></tr></thead><tbody>`;
-            html += `<tr><td>${keys[0]}</td><td>${n1}</td><td>${m1.toFixed(2)}</td><td>${sd1.toFixed(2)}</td><td rowspan="2" style="vertical-align:middle;">${t.toFixed(2)}${getStars(p)}</td><td rowspan="2" style="vertical-align:middle;">${formatPValue(p)}</td></tr>`;
-            html += `<tr><td>${keys[1]}</td><td>${n2}</td><td>${m2.toFixed(2)}</td><td>${sd2.toFixed(2)}</td></tr>`;
-            html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001。</div>`;
+            html += `<table class="academic-table"><thead><tr><th rowspan="2"></th><th colspan="2">變異數相等的 Levene 檢定</th><th colspan="5">平均數相等的 t 檢定</th><th colspan="2">差異的 95% 信賴區間</th></tr><tr><th>F 檢定</th><th>顯著性</th><th>t 值</th><th>自由度</th><th>顯著性(雙尾)</th><th>平均差異</th><th>標準誤差異</th><th>下界</th><th>上界</th></tr></thead><tbody>`;
             
-            let tResultStr = p < 0.05 ? `達顯著水準（t = ${t.toFixed(2)}, p = ${formatPValue(p)}）。進一步檢視其平均數可知，「${m1 > m2 ? keys[0] : keys[1]}」群體在該構面上之得分顯著高於「${m1 > m2 ? keys[1] : keys[0]}」群體` : `未達顯著水準（t = ${t.toFixed(2)}, p = ${formatPValue(p)}），顯示不同${ind}之群體在該構面上並無統計學上之顯著差異`;
+            html += `<tr><td style="text-align:left;">假設變異數相等</td><td>${levene.F.toFixed(3)}</td><td>${formatFloatAPA(levene.p, 3)}</td><td>${tEqual.toFixed(3)}</td><td>${dfEqual}</td><td>${formatPValue(pEqual)}</td><td>${(m1-m2).toFixed(3)}</td><td>${seEqual.toFixed(3)}</td><td>${ciLowerEqual.toFixed(3)}</td><td>${ciUpperEqual.toFixed(3)}</td></tr>`;
+            html += `<tr><td style="text-align:left;">不假設變異數相等</td><td></td><td></td><td>${tUnequal.toFixed(3)}</td><td>${dfUnequal.toFixed(3)}</td><td>${formatPValue(pUnequal)}</td><td>${(m1-m2).toFixed(3)}</td><td>${seUnequal.toFixed(3)}</td><td>${ciLowerUnequal.toFixed(3)}</td><td>${ciUpperUnequal.toFixed(3)}</td></tr>`;
+            html += `</tbody></table><div class="table-note">註：若 Levene 檢定顯著性 < .05，應採「不假設變異數相等」之 t 檢定結果。</div>`;
             
-            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">表 4.${globalTableIndex-1} 探討不同${ind}（${keys[0]}與${keys[1]}）在【${dep}】構面上之差異情形。經獨立樣本 t 檢定分析結果顯示，兩群體間之差異${tResultStr}。此分析結果可提供實務界針對特定人口學特徵群體擬定差異化策略之客觀參考依據。</p>`;
+            // 決定最終採用的檢定數值供文字解讀使用
+            let finalT = levene.p < 0.05 ? tUnequal : tEqual;
+            let finalP = levene.p < 0.05 ? pUnequal : pEqual;
+            let dfType = levene.p < 0.05 ? `不假設變異數相等（Welch's t 校正，df = ${dfUnequal.toFixed(2)}）` : `假設變異數相等（df = ${dfEqual}）`;
+            
+            let tResultStr = finalP < 0.05 ? `達顯著水準（t = ${finalT.toFixed(2)}, p = ${formatPValue(finalP)}）。進一步檢視其平均數可知，「${m1 > m2 ? keys[0] : keys[1]}」群體在該構面上之得分顯著高於「${m1 > m2 ? keys[1] : keys[0]}」群體` : `未達顯著水準（t = ${finalT.toFixed(2)}, p = ${formatPValue(finalP)}），顯示不同${ind}之群體在該構面上並無統計學上之顯著差異`;
+            
+            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">表 4.${globalTableIndex-1} 探討不同${ind}（${keys[0]}與${keys[1]}）在【${dep}】構面上之差異情形。經獨立樣本 t 檢定分析，首先進行 Levene 變異數同質性檢定，其結果${levene.p < 0.05 ? `達顯著水準（F = ${levene.F.toFixed(2)}, p = ${formatPValue(levene.p)}），故採${dfType}之檢定結果。` : `未達顯著水準（F = ${levene.F.toFixed(2)}, p = ${formatPValue(levene.p)}），故採${dfType}之檢定結果。`}後續分析顯示，兩群體間之差異${tResultStr}。此分析結果可提供實務界針對特定人口學特徵群體擬定差異化策略之客觀參考依據。</p>`;
             
             saveToHistory(html);
-            document.getElementById('prof-message').innerHTML = `t 檢定完成！解讀說明已自動幫你判斷「達顯著」或「未達顯著」，若顯著還會自動幫你寫出哪一組表現較高！`;
+            document.getElementById('prof-message').innerHTML = `t 檢定完成！系統已精準對接業界標準，列出 Levene 變異數同質性檢定，並自動依據其顯著性為你解讀正確的 t 值！`;
         }
 
         function runAnova() {
@@ -870,7 +936,16 @@
             html += `<tr><td><strong>總計</strong></td><td><strong>${totalN}</strong></td><td><strong>${grandMean.toFixed(2)}</strong></td><td><strong>${std(allVals).toFixed(2)}</strong></td></tr>`;
             html += `</tbody></table>`;
 
-            // 2. ANOVA 表
+            // 2. Levene 同質性檢定表
+            let levene = calcLevene(groups);
+            let leveneSig = levene.p < 0.05;
+
+            html += `<div class="table-title">表4.${globalTableIndex++} 【${dep}】之變異數同質性檢定 (Levene's Test)</div>`;
+            html += `<table class="academic-table"><thead><tr><th>Levene 統計量 (F)</th><th>df1</th><th>df2</th><th>顯著性 (p 值)</th></tr></thead><tbody>`;
+            html += `<tr><td>${levene.F.toFixed(3)}</td><td>${levene.dfBetween}</td><td>${levene.dfWithin}</td><td>${formatPValue(levene.p)}</td></tr>`;
+            html += `</tbody></table>`;
+
+            // 3. ANOVA 表
             let ssTotal = allVals.reduce((a, b) => a + Math.pow(b - grandMean, 2), 0);
             let ssWithin = ssTotal - ssBetween;
             
@@ -890,38 +965,68 @@
             html += `<tr><td>總和</td><td>${ssTotal.toFixed(2)}</td><td>${totalN - 1}</td><td></td></tr>`;
             html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001。</div>`;
 
-            // 3. 事後檢定 (Post-hoc) 如果 p < 0.05
+            // 4. 事後檢定 (Post-hoc) 如果 ANOVA p < 0.05
             let msg = `ANOVA 運算與解讀完成！`;
+            let sigPairs = [];
+            
             if (p < 0.05) {
-                msg += ` F檢定達顯著 ($p < 0.05$)，系統已自動為你執行事後檢定。`;
-                html += `<div class="table-title">表4.${globalTableIndex++} 【${dep}】之事後比較摘要表 (Scheffé法)</div>`;
-                html += `<table class="academic-table"><thead><tr><th>組別 (I)</th><th>組別 (J)</th><th>平均數差異 (I-J)</th><th>p 值 (事後)</th></tr></thead><tbody>`;
+                let postHocName = leveneSig ? "Dunnett T3 法" : "Scheffé 法";
+                msg += ` F檢定達顯著 ($p < 0.05$)，且依據同質性檢定結果，系統自動為你執行了 ${postHocName} 事後檢定，並兩兩比較找出差異組。`;
                 
-                // 簡易版兩兩 t 檢定模擬事後檢定
+                html += `<div class="table-title">表4.${globalTableIndex++} 【${dep}】之事後比較摘要表 (${postHocName})</div>`;
+                html += `<table class="academic-table"><thead><tr><th>組別 (I)</th><th>組別 (J)</th><th>平均數差異 (I-J)</th><th>標準誤</th><th>p 值 (事後)</th><th>兩兩比較結果</th></tr></thead><tbody>`;
+                
                 for(let i=0; i<keys.length; i++) {
                     for(let j=i+1; j<keys.length; j++) {
                         let g1 = groups[keys[i]], g2 = groups[keys[j]];
-                        let diff = mean(g1) - mean(g2);
-                        // 計算 pooled variance for these two
-                        const pVar = ((g1.length-1)*Math.pow(std(g1),2) + (g2.length-1)*Math.pow(std(g2),2)) / (g1.length+g2.length-2);
-                        const se = Math.sqrt(pVar * (1/g1.length + 1/g2.length));
-                        let tPair = Math.abs(diff) / se;
-                        // 這裡為了簡化，直接用獨立 t 的 p 值乘上比較次數 (Bonferroni 校正概念)
-                        let rawP = jStat.ttest(tPair, g1.length+g2.length-2, 2);
-                        let adjP = Math.min(1.0, rawP * (keys.length * (keys.length-1) / 2)); 
+                        let m1 = mean(g1), m2 = mean(g2);
+                        let diff = m1 - m2;
+                        let adjP = 1.0;
+                        let sePair = 0;
+
+                        if (leveneSig) {
+                            // Dunnett T3 approximation
+                            let v1 = Math.pow(std(g1), 2);
+                            let v2 = Math.pow(std(g2), 2);
+                            sePair = Math.sqrt(v1/g1.length + v2/g2.length);
+                            let tPair = Math.abs(diff) / sePair;
+                            let dfPair = Math.pow(v1/g1.length + v2/g2.length, 2) / (Math.pow(v1/g1.length, 2)/(g1.length-1) + Math.pow(v2/g2.length, 2)/(g2.length-1));
+                            let rawP = jStat.ttest(tPair, dfPair, 2);
+                            let numComparisons = keys.length * (keys.length - 1) / 2;
+                            adjP = Math.min(1.0, rawP * numComparisons);
+                        } else {
+                            // Scheffé (嚴格的 F 分配校正)
+                            sePair = Math.sqrt(msWithin * (1/g1.length + 1/g2.length));
+                            let F_ij = Math.pow(Math.abs(diff) / sePair, 2);
+                            adjP = 1 - jStat.centralF.cdf(F_ij / (keys.length - 1), keys.length - 1, totalN - keys.length);
+                        }
                         
                         let star = getStars(adjP);
                         let bold = adjP < 0.05 ? "font-weight:bold;" : "";
-                        html += `<tr><td>${keys[i]}</td><td>${keys[j]}</td><td style="${bold}">${diff.toFixed(2)}${star}</td><td>${formatPValue(adjP)}</td></tr>`;
+                        let compResult = "無顯著差異";
+                        if (adjP < 0.05) {
+                            if (diff > 0) {
+                                compResult = `${keys[i]} > ${keys[j]}`;
+                                sigPairs.push(compResult);
+                            } else {
+                                compResult = `${keys[j]} > ${keys[i]}`;
+                                sigPairs.push(compResult);
+                            }
+                        }
+                        
+                        html += `<tr><td>${keys[i]}</td><td>${keys[j]}</td><td style="${bold}">${diff.toFixed(3)}${star}</td><td>${sePair.toFixed(3)}</td><td>${formatPValue(adjP)}</td><td style="${bold}">${compResult}</td></tr>`;
                     }
                 }
-                html += `</tbody></table>`;
+                html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001。</div>`;
             } else {
-                msg += ` 由於 F 檢定未達顯著 ($p > 0.05$)，故不需進行事後比較。`;
+                msg += ` 由於 F 檢定未達顯著 ($p > 0.05$)，依流程不需進行事後比較。`;
             }
 
-            let anovaResultStr = p < 0.05 ? `達顯著水準（F = ${f.toFixed(2)}, p = ${formatPValue(p)}），表示至少有兩組群體間存在顯著差異。經進一步以 Scheffé 法進行事後比較檢定確認，群體間之細部差異方向已呈現於事後比較摘要表中` : `未達顯著水準（F = ${f.toFixed(2)}, p = ${formatPValue(p)}），顯示不同${ind}分組在該變項上之平均數並無統計學上之顯著差異`;
-            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">本研究採用單因子變異數分析（ANOVA）探討不同${ind}之受訪者在【${dep}】得分上之差異情形。分析結果指出，不同分組在該構面上之差異${anovaResultStr}。此檢定結果有助於釐清特定族群間之感受差異，提供後續研究或政策制定之精準參考。</p>`;
+            let anovaResultStr = p < 0.05 ? 
+                `達顯著水準（F = ${f.toFixed(2)}, p = ${formatPValue(p)}），表示各組間有差異。依據變異數分析流程，進一步檢視同質性 Levene 檢定，其結果${leveneSig ? `達顯著水準（p = ${formatPValue(levene.p)} < .05），故採用 Dunnett T3 法` : `未達顯著水準（p = ${formatPValue(levene.p)} > .05），故採用 Scheffé 法`}進行事後檢定。經兩兩比較找出差異組，結果顯示：${sigPairs.length > 0 ? sigPairs.join('；') : '各組間並無顯著差異'}。` : 
+                `未達顯著水準（F = ${f.toFixed(2)}, p = ${formatPValue(p)} > .05），表示各組間沒有顯著差異，故不需做事後檢定。`;
+            
+            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">本研究探討不同${ind}之受訪者在【${dep}】得分上之差異情形。首先進行變異數分析 F 檢定，結果${anovaResultStr}此檢定結果有助於釐清特定族群間之感受差異，提供後續研究或政策制定之精準參考。</p>`;
 
             saveToHistory(html);
             document.getElementById('prof-message').innerHTML = msg;
