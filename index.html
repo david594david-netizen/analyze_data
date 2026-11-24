@@ -91,6 +91,7 @@
                 
                 <p class="text-xs text-slate-400 mt-6 mb-2 uppercase tracking-wider font-bold">預試與信效度</p>
                 <button onclick="setupAnalysis('discrimination')" class="w-full text-left px-4 py-2 mb-1 rounded hover:bg-slate-700 text-slate-300 transition-colors"><i class="fa-solid fa-filter w-6"></i> 項目分析 (鑑別度)</button>
+                <button onclick="setupAnalysis('factor')" class="w-full text-left px-4 py-2 mb-1 rounded hover:bg-slate-700 text-slate-300 transition-colors"><i class="fa-solid fa-cubes w-6"></i> 因素分析 (效度檢驗)</button>
                 <button onclick="setupAnalysis('reliability')" class="w-full text-left px-4 py-2 mb-1 rounded hover:bg-slate-700 text-slate-300 transition-colors"><i class="fa-solid fa-shield-halved w-6"></i> 信度分析 (Cronbach's α)</button>
 
                 <p class="text-xs text-slate-400 mt-6 mb-2 uppercase tracking-wider font-bold">現況分析 (敘述統計)</p>
@@ -484,6 +485,31 @@
                         <button onclick="executeAnalysis()" class="px-6 py-2 h-10 mt-6 bg-blue-600 hover:bg-blue-700 text-white rounded shadow transition-colors font-medium">執行鑑別度分析</button>
                     `;
                 }
+                else if (type === 'factor') {
+                    titleEl.innerHTML = '<i class="fa-solid fa-cubes text-blue-600 mr-2"></i>探索性因素分析 (建構效度檢驗)';
+                    descEl.innerText = '執行 KMO 與 Bartlett 球形檢定，並以主成分分析法與最大變異法 (Varimax) 進行因素萃取與轉軸。';
+                    if(constructVars.length === 0) ctrlEl.innerHTML = `<p class="text-red-500 font-bold">請先建立構面。</p>`;
+                    else {
+                        const allSelectedOptions = constructVars.map(v => `<option value="${v}" selected>${v} (${constructItemMapping[v].length}題)</option>`).join('');
+                        ctrlEl.innerHTML = `
+                            <div class="flex-1 min-w-[220px]">
+                                <label class="block text-sm font-medium mb-1 text-blue-800">選擇納入分析之構面 (可複選，預設全選)</label>
+                                <select id="factor-constructs" multiple class="w-full border border-blue-300 rounded p-2 bg-white shadow-sm h-24">${allSelectedOptions}</select>
+                            </div>
+                            <div class="w-56">
+                                <label class="block text-sm font-medium mb-1">萃取準則</label>
+                                <select id="factor-criterion" onchange="document.getElementById('factor-fixed-box').classList.toggle('hidden', this.value !== 'fixed')" class="w-full border rounded p-2 bg-white shadow-sm mb-2">
+                                    <option value="eigen">特徵值大於 1 (Kaiser準則)</option>
+                                    <option value="fixed">固定萃取因素個數</option>
+                                </select>
+                                <div id="factor-fixed-box" class="hidden">
+                                    <input type="number" id="factor-fixed-num" min="1" max="20" value="${Math.max(1, constructVars.length)}" class="w-full border rounded p-1.5 bg-white shadow-sm text-sm" placeholder="輸入因素數">
+                                </div>
+                            </div>
+                            <button onclick="executeAnalysis()" class="px-6 py-2 h-10 self-end mb-1 bg-blue-600 hover:bg-blue-700 text-white rounded shadow transition-colors font-medium">執行因素分析</button>
+                        `;
+                    }
+                }
                 else if (type === 'reliability') {
                     titleEl.innerHTML = '<i class="fa-solid fa-shield-halved text-blue-600 mr-2"></i>信度分析 (Cronbach\'s α)';
                     descEl.innerText = '檢驗各個構面與整體問卷所有題項的內部一致性 (總信度)。';
@@ -543,6 +569,7 @@
                     case 'descriptive': runDescriptive(); break;
                     case 'item_stats': runItemStats(); break;
                     case 'discrimination': runDiscrimination(); break;
+                    case 'factor': runFactorAnalysis(); break;
                     case 'reliability': runReliability(); break;
                     case 'means': runConstructMeans(); break;
                     case 'ttest': runTtest(); break;
@@ -650,7 +677,7 @@
             document.getElementById('prof-message').innerHTML = `各題項的排序表與學術解讀完成！系統已幫你明確點出「最高分」與「最低分」的題項，這將是你第五章撰寫「實務建議」時最強的武器！`;
         }
 
-        // --- STREAMING_CHUNK:鑑別度與信度分析 ---
+        // --- STREAMING_CHUNK:鑑別度、因素分析與信度分析 ---
         function runDiscrimination() {
             const dep = document.getElementById('dep-var').value;
             const items = constructItemMapping[dep];
@@ -699,6 +726,376 @@
             
             saveToHistory(html);
             document.getElementById('prof-message').innerHTML = `嚴謹的鑑別度分析連同解釋段落已產出！這段文字可以直接貼進你第三章的「研究工具」或第四章的「預試分析」小節中。`;
+        }
+
+        // --- 探索性因素分析 (EFA: KMO, Bartlett, PCA + Varimax) ---
+        function runFactorAnalysis() {
+            const selectEl = document.getElementById('factor-constructs');
+            const selectedConstructs = Array.from(selectEl.selectedOptions).map(opt => opt.value);
+            if (selectedConstructs.length === 0) throw new Error("請至少選擇一個構面進行因素分析");
+
+            // 收集所選構面的所有不重複題項
+            let items = [];
+            selectedConstructs.forEach(c => {
+                constructItemMapping[c].forEach(it => {
+                    if (!items.includes(it)) items.push(it);
+                });
+            });
+
+            const p = items.length;
+            if (p < 3) throw new Error("因素分析至少需要包含 3 個題項以上");
+
+            // 1. 建立有效樣本矩陣 (listwise deletion)
+            let dataCols = Array.from({ length: p }, () => []);
+            rawData.forEach(row => {
+                let vals = [];
+                let valid = true;
+                for (let i = 0; i < p; i++) {
+                    let v = parseFloat(row[items[i]]);
+                    if (isNaN(v)) { valid = false; break; }
+                    vals.push(v);
+                }
+                if (valid) {
+                    for (let i = 0; i < p; i++) dataCols[i].push(vals[i]);
+                }
+            });
+
+            const n = dataCols[0].length;
+            if (n <= p || n < 5) throw new Error(`有效樣本數 (N=${n}) 不足以對 ${p} 個題項進行因素分析（樣本數需大於題項數）`);
+
+            // 2. 計算標準化相關矩陣 R (p x p)
+            const means = dataCols.map(col => mean(col));
+            const sds = dataCols.map(col => std(col));
+            for (let i = 0; i < p; i++) {
+                if (sds[i] === 0) throw new Error(`題項 [${items[i]}] 所有受訪者填答皆相同（標準差為 0），無法進行因素分析`);
+            }
+
+            let R = Array.from({ length: p }, () => Array(p).fill(0));
+            for (let i = 0; i < p; i++) {
+                R[i][i] = 1.0;
+                for (let j = i + 1; j < p; j++) {
+                    let cov = 0;
+                    for (let k = 0; k < n; k++) {
+                        cov += (dataCols[i][k] - means[i]) * (dataCols[j][k] - means[j]);
+                    }
+                    let r = cov / ((n - 1) * sds[i] * sds[j]);
+                    r = Math.max(-1, Math.min(1, r));
+                    R[i][j] = r;
+                    R[j][i] = r;
+                }
+            }
+
+            // 3. Jacobi 特徵值分解 (對稱矩陣 R)
+            const jacobiEigen = (mat) => {
+                const size = mat.length;
+                let A = mat.map(r => [...r]);
+                let V = Array.from({ length: size }, (_, i) => Array.from({ length: size }, (_, j) => (i === j ? 1 : 0)));
+                const maxIter = 100 * size * size;
+
+                for (let iter = 0; iter < maxIter; iter++) {
+                    let maxVal = 0, k = 0, l = 1;
+                    for (let i = 0; i < size; i++) {
+                        for (let j = i + 1; j < size; j++) {
+                            if (Math.abs(A[i][j]) > maxVal) {
+                                maxVal = Math.abs(A[i][j]);
+                                k = i; l = j;
+                            }
+                        }
+                    }
+                    if (maxVal < 1e-10) break;
+
+                    const diff = A[l][l] - A[k][k];
+                    let t;
+                    if (Math.abs(A[k][l]) < Math.abs(diff) * 1e-36) {
+                        t = A[k][l] / diff;
+                    } else {
+                        const phi = diff / (2.0 * A[k][l]);
+                        t = 1.0 / (Math.abs(phi) + Math.sqrt(phi * phi + 1.0));
+                        if (phi < 0) t = -t;
+                    }
+                    const c = 1.0 / Math.sqrt(1.0 + t * t);
+                    const s = t * c;
+                    const tau = s / (1.0 + c);
+                    const h = t * A[k][l];
+
+                    A[k][k] -= h;
+                    A[l][l] += h;
+                    A[k][l] = 0;
+                    A[l][k] = 0;
+
+                    for (let i = 0; i < size; i++) {
+                        if (i !== k && i !== l) {
+                            const g = A[i][k];
+                            const h2 = A[i][l];
+                            A[i][k] = g - s * (h2 + g * tau);
+                            A[k][i] = A[i][k];
+                            A[i][l] = h2 + s * (g - h2 * tau);
+                            A[l][i] = A[i][l];
+                        }
+                        const vk = V[i][k];
+                        const vl = V[i][l];
+                        V[i][k] = vk - s * (vl + vk * tau);
+                        V[i][l] = vl + s * (vk - vl * tau);
+                    }
+                }
+
+                // 依特徵值由大到小排序
+                let pairs = [];
+                for (let i = 0; i < size; i++) {
+                    pairs.push({ val: A[i][i], vec: V.map(row => row[i]) });
+                }
+                pairs.sort((a, b) => b.val - a.val);
+                return {
+                    values: pairs.map(x => x.val),
+                    vectors: pairs.map(x => x.vec)
+                };
+            };
+
+            // 反矩陣運算 (Gauss-Jordan 含主元選取，用於 KMO)
+            const invertSymmetric = (M) => {
+                const size = M.length;
+                let a = M.map(r => [...r]);
+                let I = Array.from({ length: size }, (_, i) => Array.from({ length: size }, (_, j) => (i === j ? 1 : 0)));
+                for (let i = 0; i < size; i++) {
+                    let pivot = i;
+                    for (let j = i + 1; j < size; j++) {
+                        if (Math.abs(a[j][i]) > Math.abs(a[pivot][i])) pivot = j;
+                    }
+                    if (Math.abs(a[pivot][i]) < 1e-10) {
+                        throw new Error("相關矩陣為奇異矩陣（存在高度線性相依或完全重複之題項），無法計算 KMO 與 Bartlett 檢定");
+                    }
+                    if (pivot !== i) {
+                        [a[i], a[pivot]] = [a[pivot], a[i]];
+                        [I[i], I[pivot]] = [I[pivot], I[i]];
+                    }
+                    const div = a[i][i];
+                    for (let j = 0; j < size; j++) { a[i][j] /= div; I[i][j] /= div; }
+                    for (let j = 0; j < size; j++) {
+                        if (i !== j) {
+                            const factor = a[j][i];
+                            for (let k = 0; k < size; k++) {
+                                a[j][k] -= factor * a[i][k];
+                                I[j][k] -= factor * I[i][k];
+                            }
+                        }
+                    }
+                }
+                return I;
+            };
+
+            // 4. 計算 KMO 與 Bartlett 球形檢定
+            const eig = jacobiEigen(R);
+            const Rinv = invertSymmetric(R);
+
+            let sumR2 = 0, sumP2 = 0;
+            for (let i = 0; i < p; i++) {
+                for (let j = 0; j < p; j++) {
+                    if (i !== j) {
+                        sumR2 += R[i][j] * R[i][j];
+                        const partial = -Rinv[i][j] / Math.sqrt(Math.abs(Rinv[i][i] * Rinv[j][j]));
+                        sumP2 += partial * partial;
+                    }
+                }
+            }
+            const kmo = sumR2 / (sumR2 + sumP2);
+
+            // 行列式 det(R) = 所有特徵值之乘積
+            let logDetR = 0;
+            for (let i = 0; i < p; i++) {
+                const ev = Math.max(eig.values[i], 1e-12);
+                logDetR += Math.log(ev);
+            }
+            const bartlettChi2 = -((n - 1) - (2 * p + 5) / 6) * logDetR;
+            const bartlettDf = (p * (p - 1)) / 2;
+            const bartlettP = 1 - jStat.chisquare.cdf(bartlettChi2, bartlettDf);
+
+            // 5. 決定萃取之因素個數 m
+            const criterion = document.getElementById('factor-criterion').value;
+            let m = 0;
+            if (criterion === 'fixed') {
+                m = parseInt(document.getElementById('factor-fixed-num').value, 10);
+                if (isNaN(m) || m < 1) m = 1;
+                if (m > p) m = p;
+            } else {
+                m = eig.values.filter(v => v > 1.0).length;
+                if (m < 1) m = 1;
+            }
+
+            // 建立初始負荷矩陣 L (p x m)
+            let L = Array.from({ length: p }, (_, i) =>
+                Array.from({ length: m }, (_, j) => eig.vectors[j][i] * Math.sqrt(Math.max(0, eig.values[j])))
+            );
+
+            // 計算共同性 (Communalities)
+            const communalities = L.map(row => row.reduce((s, v) => s + v * v, 0));
+
+            // 6. 最大變異法 (Kaiser-Normalized Varimax) 直交轉軸
+            let rotL = L.map(row => [...row]);
+            if (m >= 2) {
+                const h = communalities.map(c => (c > 1e-10 ? Math.sqrt(c) : 1.0));
+                let B = rotL.map((row, i) => row.map(v => v / h[i]));
+
+                for (let sweep = 0; sweep < 100; sweep++) {
+                    let maxAngle = 0;
+                    for (let a = 0; a < m - 1; a++) {
+                        for (let b = a + 1; b < m; b++) {
+                            let A_s = 0, B_s = 0, C_s = 0, D_s = 0;
+                            for (let i = 0; i < p; i++) {
+                                const u = B[i][a] * B[i][a] - B[i][b] * B[i][b];
+                                const v = 2 * B[i][a] * B[i][b];
+                                A_s += u;
+                                B_s += v;
+                                C_s += u * u - v * v;
+                                D_s += 2 * u * v;
+                            }
+                            const num = D_s - (2 * A_s * B_s) / p;
+                            const den = C_s - (A_s * A_s - B_s * B_s) / p;
+                            const phi = 0.25 * Math.atan2(num, den);
+                            if (Math.abs(phi) > maxAngle) maxAngle = Math.abs(phi);
+
+                            if (Math.abs(phi) > 1e-7) {
+                                const cosP = Math.cos(phi);
+                                const sinP = Math.sin(phi);
+                                for (let i = 0; i < p; i++) {
+                                    const ba = B[i][a];
+                                    const bb = B[i][b];
+                                    B[i][a] = ba * cosP + bb * sinP;
+                                    B[i][b] = -ba * sinP + bb * cosP;
+                                }
+                            }
+                        }
+                    }
+                    if (maxAngle < 1e-6) break;
+                }
+
+                // 還原尺度
+                rotL = B.map((row, i) => row.map(v => v * h[i]));
+
+                // 調整正負號方向（讓每個因素主要負荷總和為正）
+                for (let j = 0; j < m; j++) {
+                    let colSum = 0;
+                    for (let i = 0; i < p; i++) colSum += rotL[i][j];
+                    if (colSum < 0) {
+                        for (let i = 0; i < p; i++) rotL[i][j] = -rotL[i][j];
+                    }
+                }
+            }
+
+            // 計算轉軸後各因素之特徵值 (平方和負荷) 並依大小排序因素欄位
+            let factorInfo = Array.from({ length: m }, (_, j) => {
+                let ss = 0;
+                for (let i = 0; i < p; i++) ss += rotL[i][j] * rotL[i][j];
+                return { origIdx: j, ss: ss, pct: (ss / p) * 100 };
+            });
+            factorInfo.sort((a, b) => b.ss - a.ss);
+
+            // 重排 rotL 欄位順序
+            const sortedRotL = rotL.map(row => factorInfo.map(f => row[f.origIdx]));
+
+            // 計算累積解釋變異量
+            let cumPct = 0;
+            factorInfo.forEach(f => {
+                cumPct += f.pct;
+                f.cumPct = cumPct;
+            });
+
+            // 依 SPSS 習慣：將題項依所屬主要因素與負荷量大小排序
+            let itemRows = items.map((name, i) => {
+                let loads = sortedRotL[i];
+                let primaryFactor = 0;
+                let maxAbsLoad = -1;
+                loads.forEach((v, idx) => {
+                    if (Math.abs(v) > maxAbsLoad) {
+                        maxAbsLoad = Math.abs(v);
+                        primaryFactor = idx;
+                    }
+                });
+                return {
+                    name,
+                    comm: communalities[i],
+                    loads,
+                    primaryFactor,
+                    maxAbsLoad
+                };
+            });
+            itemRows.sort((a, b) => {
+                if (a.primaryFactor !== b.primaryFactor) return a.primaryFactor - b.primaryFactor;
+                return b.maxAbsLoad - a.maxAbsLoad;
+            });
+
+            // --- 產出 APA 7th 學術報表 ---
+            const scopeLabel = selectedConstructs.length === Object.keys(constructItemMapping).length
+                ? "整體量表"
+                : selectedConstructs.join("、");
+
+            // 表1：KMO 與 Bartlett 球形檢定表
+            let html = `<div class="table-title">表4.${globalTableIndex++} 【${scopeLabel}】KMO 與 Bartlett 球形檢定摘要表 (N=${n})</div>`;
+            html += `<table class="academic-table"><thead><tr><th colspan="2">檢定項目</th><th>數值</th></tr></thead><tbody>`;
+            html += `<tr><td colspan="2" style="text-align:left;">Kaiser-Meyer-Olkin 取樣適切性量數 (KMO)</td><td>${formatFloatAPA(kmo, 3)}</td></tr>`;
+            html += `<tr><td rowspan="3" style="text-align:left; vertical-align:middle;">Bartlett 的球形檢定</td><td style="text-align:left;">近似卡方分配 (χ²)</td><td>${bartlettChi2.toFixed(3)}</td></tr>`;
+            html += `<tr><td style="text-align:left;">自由度 (df)</td><td>${bartlettDf}</td></tr>`;
+            html += `<tr><td style="text-align:left;">顯著性 (p 值)</td><td>${formatPValue(bartlettP)}${getStars(bartlettP)}</td></tr>`;
+            html += `</tbody></table><div class="table-note">註：* p < .05, ** p < .01, *** p < .001。</div>`;
+
+            // 表2：因素分析摘要表 (轉軸後成分矩陣)
+            html += `<div class="table-title" style="margin-top: 18pt;">表4.${globalTableIndex++} 【${scopeLabel}】探索性因素分析摘要表</div>`;
+            html += `<table class="academic-table"><thead><tr><th>題項名稱</th><th>共同性 (h²)</th>`;
+            for (let j = 0; j < m; j++) {
+                html += `<th>因素 ${j + 1}</th>`;
+            }
+            html += `</tr></thead><tbody>`;
+
+            let lowLoadingItems = [];
+            itemRows.forEach(item => {
+                if (item.maxAbsLoad < 0.5) lowLoadingItems.push(item.name);
+                html += `<tr><td style="text-align:left;">${item.name}</td><td>${formatFloatAPA(item.comm, 3)}</td>`;
+                item.loads.forEach((val, idx) => {
+                    const isPrimary = idx === item.primaryFactor;
+                    const style = isPrimary && Math.abs(val) >= 0.5 ? 'font-weight:bold;' : (Math.abs(val) < 0.3 ? 'color:#94a3b8;' : '');
+                    html += `<td style="${style}">${formatFloatAPA(val, 3)}</td>`;
+                });
+                html += `</tr>`;
+            });
+
+            // 表格底部彙整列：特徵值、解釋變異量、累積解釋變異量
+            html += `<tr><td style="border-top:1px solid black; text-align:left;"><strong>特徵值${m >= 2 ? ' (轉軸後)' : ''}</strong></td><td style="border-top:1px solid black;">-</td>`;
+            factorInfo.forEach(f => { html += `<td style="border-top:1px solid black;"><strong>${f.ss.toFixed(3)}</strong></td>`; });
+            html += `</tr>`;
+
+            html += `<tr><td style="text-align:left;"><strong>解釋變異量 (%)</strong></td><td>-</td>`;
+            factorInfo.forEach(f => { html += `<td><strong>${f.pct.toFixed(2)}%</strong></td>`; });
+            html += `</tr>`;
+
+            html += `<tr><td style="text-align:left;"><strong>累積解釋變異量 (%)</strong></td><td>-</td>`;
+            factorInfo.forEach(f => { html += `<td><strong>${f.cumPct.toFixed(2)}%</strong></td>`; });
+            html += `</tr>`;
+
+            html += `</tbody></table>`;
+            html += `<div class="table-note">註：萃取方法為主成分分析法；${m >= 2 ? '轉軸方法為含 Kaiser 常態化之最大變異法 (Varimax)' : '僅萃取 1 個因素，故未進行轉軸'}；粗體數值表該題項之主要因素負荷量 (≥ .50)。</div>`;
+
+            // 學術解讀文字
+            let kmoEval = "";
+            if (kmo >= 0.9) kmoEval = "極佳（Marvelous）";
+            else if (kmo >= 0.8) kmoEval = "良好（Meritorious）";
+            else if (kmo >= 0.7) kmoEval = "尚可（Middling）";
+            else if (kmo >= 0.6) kmoEval = "普通（Mediocre）";
+            else kmoEval = "欠佳（需審慎檢視題項設計）";
+
+            const bartlettDesc = bartlettP < 0.05
+                ? `達統計上之顯著水準（χ² = ${bartlettChi2.toFixed(2)}, df = ${bartlettDf}, p ${bartlettP < 0.001 ? '< .001' : '= ' + formatPValue(bartlettP)}），表示母群體相關矩陣間存在共同因素，極適合進行因素分析`
+                : `未達顯著水準（p = ${formatPValue(bartlettP)}），顯示題項間相關性偏弱，進行因素分析之適切性較低`;
+
+            const loadingDesc = lowLoadingItems.length === 0
+                ? `所有題項之主要因素負荷量皆高於 .50 之學術建議標準，顯示各題項均能良好歸屬於其對應之潛在因素，具備優良之建構效度`
+                : `多數題項具備良好歸屬，惟「${lowLoadingItems.join('」、「')}」之主要因素負荷量低於 .50，後續修訂量表時可考慮予以調整或刪除`;
+
+            const totalVarPct = factorInfo[factorInfo.length - 1].cumPct.toFixed(2);
+            const criterionText = criterion === 'fixed' ? `固定萃取 ${m} 個因素` : `特徵值大於 1 之準則`;
+
+            html += `<p style="text-indent: 2em; margin-top: 12pt; margin-bottom: 24pt; line-height: 1.5;">表 4.${globalTableIndex-2} 與表 4.${globalTableIndex-1} 為【${scopeLabel}】之探索性因素分析（EFA）結果，用以檢驗本研究量表之建構效度。首先檢視取樣適切性指標，KMO 值為 ${formatFloatAPA(kmo, 3)}，依據 Kaiser（1974）之評判標準屬於${kmoEval}水準；且 Bartlett 球形檢定${bartlettDesc}。接著採用主成分分析法，依據${criterionText}${m >= 2 ? '並搭配最大變異法（Varimax）進行直交轉軸' : ''}，共萃取出 ${m} 個主要因素，其總累積解釋變異量達 ${totalVarPct}%。進一步檢視各題項之因素負荷量，${loadingDesc}。</p>`;
+
+            saveToHistory(html);
+            document.getElementById('prof-message').innerHTML = `因素分析（KMO、Bartlett 球形檢定與轉軸後成分矩陣）已經完成！系統已比照 SPSS 慣例幫你將題項依因素與負荷量大小排好順序，並自動判讀建構效度水準，這段報表與文字可以直接放進論文的「效度分析」小節！`;
         }
 
         function runReliability() {
